@@ -1,0 +1,215 @@
+{
+  "schema_version": 1,
+  "kind": "package_input_provenance_no_experiment_results",
+  "verified_at_utc": "2026-10-01T14:43:39.804528-04:00",
+  "scope": "Input identification and byte-integrity checks for the local two-stage DWD package. Original inputs and handoff remain outside the package source. No pilot, calibration, or numerical study is represented by this file.",
+  "path_convention": "handoff_ref values are relative to the separately supplied source-reference directory. Original inputs are identified by filename and SHA256 without personal absolute paths.",
+  "authority": {
+    "implementation_specification": [
+      "GUIDE.md",
+      "reference/methodology-sections.txt"
+    ],
+    "legacy_scripts": "Historical reference with known defects; not an authority for the intended mathematics.",
+    "protocol_template": "Proposed experiment settings, not a frozen or executed study protocol."
+  },
+  "intake_receipt": {
+    "filename": "handoff-intake-verification.json",
+    "bytes": 11431,
+    "sha256": "a24dc8f62de6f6feb3f55df7510f83b63cab9ca0e98a3455f539cda6afb7fbc3",
+    "checked_at_utc": "2026-10-01T14:23:08.58662-04:00"
+  },
+  "handoff_manifest": {
+    "filename": "handoff-manifest.json",
+    "bytes": 2908,
+    "sha256": "cfcf31dbb2d8b7e97f23de8b43dd9b409480fe6136e2c6706dd750fbd862a675",
+    "matches_intake_verification": true
+  },
+  "handoff_files": [
+    {
+      "bytes": 43648,
+      "sha256": "cba6146ca1603fea4df89f8794782c9866f784dfb8a562828a65528b08daa4c6",
+      "handoff_ref": "GUIDE.md",
+      "matches_handoff_manifest": true,
+      "matches_intake_verification": true
+    },
+    {
+      "bytes": 7282,
+      "sha256": "27b649dfe82971de269952c2bf38860582e6e8f6aef32a8307c7bbf5343849f5",
+      "handoff_ref": "protocol.template.json",
+      "matches_handoff_manifest": true,
+      "matches_intake_verification": true
+    },
+    {
+      "bytes": 4505,
+      "sha256": "9f666389f67d8782de4264f1b89590beba1f9aea8fe87dc31c3a52ec403232e1",
+      "handoff_ref": "original/2Stage_DWD.py",
+      "matches_handoff_manifest": true,
+      "matches_intake_verification": true,
+      "original_user_input": {
+        "filename": "2Stage_DWD.py",
+        "bytes": 4505,
+        "sha256": "9f666389f67d8782de4264f1b89590beba1f9aea8fe87dc31c3a52ec403232e1",
+        "matches_handoff_copy": true
+      }
+    },
+    {
+      "bytes": 2882,
+      "sha256": "f725e09ac2ac5d7a4395323cf2423212e4feb1291d8c1ceea496ae5e6b78f77b",
+      "handoff_ref": "original/4import.py",
+      "matches_handoff_manifest": true,
+      "matches_intake_verification": true,
+      "original_user_input": {
+        "filename": "4import.py",
+        "bytes": 2882,
+        "sha256": "f725e09ac2ac5d7a4395323cf2423212e4feb1291d8c1ceea496ae5e6b78f77b",
+        "matches_handoff_copy": true
+      }
+    },
+    {
+      "bytes": 10520,
+      "sha256": "266106c1976e5f671f6e8315a87af5a019a4c653f160ac70e501f8dbb3b3c168",
+      "handoff_ref": "original/DWDcodebook.py",
+      "matches_handoff_manifest": true,
+      "matches_intake_verification": true,
+      "original_user_input": {
+        "filename": "DWDcodebook.py",
+        "bytes": 10520,
+        "sha256": "266106c1976e5f671f6e8315a87af5a019a4c653f160ac70e501f8dbb3b3c168",
+        "matches_handoff_copy": true
+      }
+    },
+    {
+      "bytes": 2425,
+      "sha256": "d8a0192a1c70ffd2eb3066545008c734b2f6be9805cbebc503b004378049a4ee",
+      "handoff_ref": "original/importdata.py",
+      "matches_handoff_manifest": true,
+      "matches_intake_verification": true,
+      "original_user_input": {
+        "filename": "importdata.py",
+        "bytes": 2425,
+        "sha256": "d8a0192a1c70ffd2eb3066545008c734b2f6be9805cbebc503b004378049a4ee",
+        "matches_handoff_copy": true
+      }
+    },
+    {
+      "bytes": 20,
+      "sha256": "d346a5ec9ab3f8f8888e9167cf64376a86c21064fcdaac513ceb8c2f740e2bf6",
+      "handoff_ref": "original/KernelDWD.py",
+      "matches_handoff_manifest": true,
+      "matches_intake_verification": true,
+      "original_user_input": {
+        "filename": "KernelDWD.py",
+        "bytes": 20,
+        "sha256": "d346a5ec9ab3f8f8888e9167cf64376a86c21064fcdaac513ceb8c2f740e2bf6",
+        "matches_handoff_copy": true
+      }
+    },
+    {
+      "bytes": 2513,
+      "sha256": "f0f35f039de9bab0b1cb2a1ac0815549d748ffa6c00010a74c9b0175c28e54bc",
+      "handoff_ref": "original/nonlinearDWD.py",
+      "matches_handoff_manifest": true,
+      "matches_intake_verification": true,
+      "original_user_input": {
+        "filename": "nonlinearDWD.py",
+        "bytes": 2513,
+        "sha256": "f0f35f039de9bab0b1cb2a1ac0815549d748ffa6c00010a74c9b0175c28e54bc",
+        "matches_handoff_copy": true
+      }
+    },
+    {
+      "bytes": 2646,
+      "sha256": "7bb1ffe78b9a8f8aa9d508ca3fd7fc020ff2805de70e19d75a936660e15a09f7",
+      "handoff_ref": "original/two_stage_import.py",
+      "matches_handoff_manifest": true,
+      "matches_intake_verification": true,
+      "original_user_input": {
+        "filename": "two_stage_import.py",
+        "bytes": 2646,
+        "sha256": "7bb1ffe78b9a8f8aa9d508ca3fd7fc020ff2805de70e19d75a936660e15a09f7",
+        "matches_handoff_copy": true
+      }
+    },
+    {
+      "bytes": 2646,
+      "sha256": "6a30b7a2415c9e200c1fb8df314bc4fe23345e01d60622ce4631a374c73d223e",
+      "handoff_ref": "original/two_stage_import2.py",
+      "matches_handoff_manifest": true,
+      "matches_intake_verification": true,
+      "original_user_input": {
+        "filename": "two_stage_import2.py",
+        "bytes": 2646,
+        "sha256": "6a30b7a2415c9e200c1fb8df314bc4fe23345e01d60622ce4631a374c73d223e",
+        "matches_handoff_copy": true
+      }
+    },
+    {
+      "bytes": 14590,
+      "sha256": "67af046d4f61cdd7355ce660eafd98cc6f0fa1e1876cfe9e1906787af4e5051a",
+      "handoff_ref": "reference/code-audit.md",
+      "matches_handoff_manifest": true,
+      "matches_intake_verification": true
+    },
+    {
+      "bytes": 14592,
+      "sha256": "28006df7b9ba087641e949bd7791b18bcbb523dd4bc6738c876c694b6ea9b9e1",
+      "handoff_ref": "reference/selection-and-source-check.json",
+      "matches_handoff_manifest": true,
+      "matches_intake_verification": true
+    },
+    {
+      "bytes": 3645756,
+      "sha256": "13dc515f35abb47c47b712202cae6761517f6683feffe3b1a09b67b4adc7b2c6",
+      "handoff_ref": "reference/WangComments-compressed.pdf",
+      "matches_handoff_manifest": true,
+      "matches_intake_verification": true
+    },
+    {
+      "bytes": 10626,
+      "sha256": "98d42c3274caa727ea9afe25a6e60a077a511ab3f04cb9097eb780191e340c54",
+      "handoff_ref": "reference/methodology-sections.txt",
+      "matches_handoff_manifest": true,
+      "matches_intake_verification": true
+    }
+  ],
+  "external_user_inputs": {
+    "implementation_guide": {
+      "filename": "chapter-03-code-repair-and-experiments-guide.md",
+      "bytes": 43648,
+      "sha256": "cba6146ca1603fea4df89f8794782c9866f784dfb8a562828a65528b08daa4c6",
+      "matches_handoff_guide": true
+    },
+    "committee_review": {
+      "filename": "WangComments-compressed.pdf",
+      "bytes": 3645756,
+      "sha256": "13dc515f35abb47c47b712202cae6761517f6683feffe3b1a09b67b4adc7b2c6",
+      "matches_handoff_review": true
+    },
+    "current_latex_chapter": {
+      "filename": "chapter-03.tex",
+      "bytes": 48065,
+      "sha256": "4e4cb4c936db0baa8921a762c3a944d8a015ecc94bc5e0401562ce2965ec1e95",
+      "handoff_manifest_source_sha256": "c794ac7039f4b3a08adbb29f0cc7cbe99db6ce4e90f00a792f5c3970be1669c0",
+      "intake_verification_sha256": "4e4cb4c936db0baa8921a762c3a944d8a015ecc94bc5e0401562ce2965ec1e95",
+      "matches_handoff_manifest_source": false,
+      "matches_intake_verification": true,
+      "discrepancy": "The current chapter file differs from the source hash recorded by the handoff manifest. The cause and timing of the change are not established by this record. The handoff methodology excerpt itself matches its manifest hash."
+    },
+    "original_dissertation_pdf": {
+      "filename": "Chang-Cheng-dissertation-combined-revision-2026-10-01.pdf",
+      "bytes": 5475418,
+      "sha256": "9a1f92e07f3a4b26a251f17001fe5ee4672260307f9d2274aa9b2a78607a63e4",
+      "role": "Original dissertation PDF supplied for the earlier code review; hash recorded for input identification, not equivalence to the current LaTeX chapter."
+    }
+  },
+  "summary": {
+    "handoff_file_count": 14,
+    "all_handoff_files_match_manifest_and_intake": true,
+    "original_script_count": 8,
+    "all_original_scripts_match_handoff": true,
+    "external_guide_matches_handoff": true,
+    "committee_review_matches_handoff": true,
+    "current_chapter_matches_handoff_manifest_source": false,
+    "current_chapter_matches_intake_verification": true
+  }
+}

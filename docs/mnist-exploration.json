@@ -1,0 +1,811 @@
+{
+  "date": "2026-10-01",
+  "package_version": "0.5.0",
+  "digits": [
+    7,
+    8
+  ],
+  "scope": "training-only package-development exploration and fixed-candidate sensitivity checks",
+  "official_test_partition_loaded": false,
+  "independent_test_performance_estimated": false,
+  "optimization_convergence_established": false,
+  "global_optimum_established": false,
+  "full_replicated_dissertation_study_run": false,
+  "data_hashes": {
+    "images": "ba891046e6505d7aadcbbe25680a0738ad16aec93bde7f9b65e87a2fc25776db",
+    "labels": "65a50cbbf4e906d70832878ad85ccda5333a97f0f4c3dd2ef09a8a9eef7101c5"
+  },
+  "preprocessing": "pixels_divided_by_255",
+  "folds": 5,
+  "split_seed": 42,
+  "batch_size": 1,
+  "sampling": "with_replacement",
+  "scoring": "mean_fold_accuracy",
+  "direct_defaults": {
+    "retention_fraction": 0.3,
+    "lambd": 1e-06,
+    "gamma": "scale",
+    "kernel": "rbf"
+  },
+  "initial_grid_including_five_percent": {
+    "kernel": [
+      "rbf"
+    ],
+    "lambd": [
+      9.313225746154785e-10,
+      2.384185791015625e-07,
+      6.103515625e-05,
+      0.015625,
+      1.0
+    ],
+    "gamma": [
+      1e-08,
+      1e-06,
+      0.0001,
+      0.01,
+      1.0
+    ],
+    "retention_fraction": [
+      0.05,
+      0.1,
+      0.15,
+      0.2,
+      0.25,
+      0.3
+    ]
+  },
+  "initial_grid_combinations": 150,
+  "initial_broader_preset_combinations": 486,
+  "recommended_grid": {
+    "kernel": [
+      "rbf"
+    ],
+    "lambd": [
+      9.313225746154785e-10,
+      2.384185791015625e-07,
+      6.103515625e-05,
+      0.015625,
+      1.0
+    ],
+    "gamma": [
+      1e-08,
+      1e-06,
+      0.0001,
+      0.01,
+      1.0
+    ],
+    "retention_fraction": [
+      0.1,
+      0.15,
+      0.2,
+      0.25,
+      0.3
+    ]
+  },
+  "recommended_grid_combinations": 125,
+  "recommended_broader_preset_combinations": 405,
+  "broader_preset_exhaustively_run": false,
+  "five_percent_removed_from_recommended_grids": true,
+  "screen": {
+    "train_size": 600,
+    "epochs_each_stage": 40,
+    "sgd_seed": 42,
+    "distinct_candidates": 564,
+    "eligible_candidates": 564,
+    "kernel_fold_fits_excluding_default_control": 2820,
+    "stages": [
+      {
+        "name": "coarse",
+        "new_candidates": 150,
+        "score_before": null,
+        "score_after": 0.9783333333333333
+      },
+      {
+        "name": "expansion-1",
+        "new_candidates": 30,
+        "score_before": 0.9783333333333333,
+        "score_after": 0.9783333333333333
+      },
+      {
+        "name": "expansion-2",
+        "new_candidates": 30,
+        "score_before": 0.9783333333333333,
+        "score_after": 0.9783333333333333
+      },
+      {
+        "name": "refinement-1",
+        "new_candidates": 90,
+        "score_before": 0.9783333333333333,
+        "score_after": 0.9783333333333333
+      },
+      {
+        "name": "refinement-2",
+        "new_candidates": 90,
+        "score_before": 0.9783333333333333,
+        "score_after": 0.9833333333333332
+      },
+      {
+        "name": "coefficient-cross-section-and-refinement",
+        "new_candidates": 168,
+        "score_before": 0.9833333333333332,
+        "score_after": 0.9833333333333332
+      },
+      {
+        "name": "retention-edges-and-midpoint",
+        "new_candidates": 6,
+        "score_before": 0.9833333333333332,
+        "score_after": 0.9883333333333333
+      }
+    ],
+    "retention_slice": [
+      {
+        "params": {
+          "kernel": "rbf",
+          "lambd": 0.0009765625,
+          "gamma": 0.0316227766016838,
+          "retention_fraction": 0.275
+        },
+        "mean_cv_accuracy": 0.9833333333333334
+      },
+      {
+        "params": {
+          "kernel": "rbf",
+          "lambd": 0.0009765625,
+          "gamma": 0.0316227766016838,
+          "retention_fraction": 0.35
+        },
+        "mean_cv_accuracy": 0.9850000000000001
+      },
+      {
+        "params": {
+          "kernel": "rbf",
+          "lambd": 0.0009765625,
+          "gamma": 0.0316227766016838,
+          "retention_fraction": 0.4
+        },
+        "mean_cv_accuracy": 0.9850000000000001
+      },
+      {
+        "params": {
+          "kernel": "rbf",
+          "lambd": 0.0009765625,
+          "gamma": 0.0316227766016838,
+          "retention_fraction": 0.5
+        },
+        "mean_cv_accuracy": 0.9866666666666667
+      },
+      {
+        "params": {
+          "kernel": "rbf",
+          "lambd": 0.0009765625,
+          "gamma": 0.0316227766016838,
+          "retention_fraction": 0.75
+        },
+        "mean_cv_accuracy": 0.9883333333333333
+      },
+      {
+        "params": {
+          "kernel": "rbf",
+          "lambd": 0.0009765625,
+          "gamma": 0.0316227766016838,
+          "retention_fraction": 1.0
+        },
+        "mean_cv_accuracy": 0.9883333333333333
+      }
+    ],
+    "selection": {
+      "params": {
+        "kernel": "rbf",
+        "lambd": 0.0009765625,
+        "gamma": 0.0316227766016838,
+        "retention_fraction": 0.75
+      },
+      "mean_cv_accuracy": 0.9883333333333333,
+      "attempted_candidates": 564,
+      "boundaries": {
+        "lambd": [],
+        "gamma": []
+      },
+      "optimization_convergence_established": false,
+      "official_test_partition_loaded": false,
+      "larger_budget_and_seed_confirmation_required": true
+    }
+  },
+  "confirmations": {
+    "pair-7-8-budget-seeds": {
+      "train_size": 600,
+      "epochs": [
+        80,
+        200
+      ],
+      "seeds": [
+        42,
+        20261001,
+        314159
+      ],
+      "candidate_count": 6,
+      "kernel_fold_fits": 180,
+      "groups": [
+        {
+          "candidate_id": "candidate-001",
+          "params": {
+            "kernel": "rbf",
+            "lambd": 0.0009765625,
+            "retention_fraction": 0.75,
+            "gamma": 0.0316227766016838
+          },
+          "roles": [
+            "screen_rank_1"
+          ],
+          "epochs": 80,
+          "seeds": [
+            42,
+            20261001,
+            314159
+          ],
+          "seed_mean_cv_accuracies": [
+            0.9883333333333333,
+            0.9883333333333333,
+            0.9883333333333333
+          ],
+          "all_seeds_eligible": true,
+          "eligible_seed_count": 3,
+          "mean_accuracy_across_seeds": 0.9883333333333333,
+          "sample_sd_across_seed_means": 0.0
+        },
+        {
+          "candidate_id": "candidate-002",
+          "params": {
+            "kernel": "rbf",
+            "lambd": 0.0009765625,
+            "retention_fraction": 1.0,
+            "gamma": 0.0316227766016838
+          },
+          "roles": [
+            "screen_rank_2"
+          ],
+          "epochs": 80,
+          "seeds": [
+            42,
+            20261001,
+            314159
+          ],
+          "seed_mean_cv_accuracies": [
+            0.99,
+            0.99,
+            0.9883333333333333
+          ],
+          "all_seeds_eligible": true,
+          "eligible_seed_count": 3,
+          "mean_accuracy_across_seeds": 0.9894444444444445,
+          "sample_sd_across_seed_means": 0.0009622504486493986
+        },
+        {
+          "candidate_id": "candidate-003",
+          "params": {
+            "kernel": "rbf",
+            "lambd": 0.0009765625,
+            "retention_fraction": 0.5,
+            "gamma": 0.0316227766016838
+          },
+          "roles": [
+            "screen_rank_3"
+          ],
+          "epochs": 80,
+          "seeds": [
+            42,
+            20261001,
+            314159
+          ],
+          "seed_mean_cv_accuracies": [
+            0.9883333333333333,
+            0.9866666666666667,
+            0.9866666666666667
+          ],
+          "all_seeds_eligible": true,
+          "eligible_seed_count": 3,
+          "mean_accuracy_across_seeds": 0.9872222222222223,
+          "sample_sd_across_seed_means": 0.0009622504486493344
+        },
+        {
+          "candidate_id": "candidate-004",
+          "params": {
+            "kernel": "rbf",
+            "lambd": 6.103515625e-05,
+            "retention_fraction": 0.25,
+            "gamma": 0.01
+          },
+          "roles": [
+            "best_coarse"
+          ],
+          "epochs": 80,
+          "seeds": [
+            42,
+            20261001,
+            314159
+          ],
+          "seed_mean_cv_accuracies": [
+            0.9833333333333334,
+            0.9816666666666667,
+            0.9816666666666667
+          ],
+          "all_seeds_eligible": true,
+          "eligible_seed_count": 3,
+          "mean_accuracy_across_seeds": 0.9822222222222222,
+          "sample_sd_across_seed_means": 0.0009622504486493986
+        },
+        {
+          "candidate_id": "candidate-005",
+          "params": {
+            "kernel": "rbf",
+            "lambd": 6.103515625e-05,
+            "retention_fraction": 0.05,
+            "gamma": 0.0316227766016838
+          },
+          "roles": [
+            "best_five_percent"
+          ],
+          "epochs": 80,
+          "seeds": [
+            42,
+            20261001,
+            314159
+          ],
+          "seed_mean_cv_accuracies": [
+            0.66,
+            0.625,
+            0.6516666666666667
+          ],
+          "all_seeds_eligible": true,
+          "eligible_seed_count": 3,
+          "mean_accuracy_across_seeds": 0.6455555555555555,
+          "sample_sd_across_seed_means": 0.01828275852433817
+        },
+        {
+          "candidate_id": "candidate-006",
+          "params": {
+            "kernel": "rbf",
+            "lambd": 1e-06,
+            "retention_fraction": 0.05,
+            "gamma": "scale"
+          },
+          "roles": [
+            "inherited_default"
+          ],
+          "epochs": 80,
+          "seeds": [
+            42,
+            20261001,
+            314159
+          ],
+          "seed_mean_cv_accuracies": [
+            0.6466666666666666,
+            0.6233333333333333,
+            0.6433333333333333
+          ],
+          "all_seeds_eligible": true,
+          "eligible_seed_count": 3,
+          "mean_accuracy_across_seeds": 0.6377777777777777,
+          "sample_sd_across_seed_means": 0.012619796324000607
+        },
+        {
+          "candidate_id": "candidate-001",
+          "params": {
+            "kernel": "rbf",
+            "lambd": 0.0009765625,
+            "retention_fraction": 0.75,
+            "gamma": 0.0316227766016838
+          },
+          "roles": [
+            "screen_rank_1"
+          ],
+          "epochs": 200,
+          "seeds": [
+            42,
+            20261001,
+            314159
+          ],
+          "seed_mean_cv_accuracies": [
+            0.9883333333333333,
+            0.9883333333333333,
+            0.9883333333333333
+          ],
+          "all_seeds_eligible": true,
+          "eligible_seed_count": 3,
+          "mean_accuracy_across_seeds": 0.9883333333333333,
+          "sample_sd_across_seed_means": 0.0
+        },
+        {
+          "candidate_id": "candidate-002",
+          "params": {
+            "kernel": "rbf",
+            "lambd": 0.0009765625,
+            "retention_fraction": 1.0,
+            "gamma": 0.0316227766016838
+          },
+          "roles": [
+            "screen_rank_2"
+          ],
+          "epochs": 200,
+          "seeds": [
+            42,
+            20261001,
+            314159
+          ],
+          "seed_mean_cv_accuracies": [
+            0.9883333333333333,
+            0.9883333333333333,
+            0.99
+          ],
+          "all_seeds_eligible": true,
+          "eligible_seed_count": 3,
+          "mean_accuracy_across_seeds": 0.9888888888888889,
+          "sample_sd_across_seed_means": 0.0009622504486493984
+        },
+        {
+          "candidate_id": "candidate-003",
+          "params": {
+            "kernel": "rbf",
+            "lambd": 0.0009765625,
+            "retention_fraction": 0.5,
+            "gamma": 0.0316227766016838
+          },
+          "roles": [
+            "screen_rank_3"
+          ],
+          "epochs": 200,
+          "seeds": [
+            42,
+            20261001,
+            314159
+          ],
+          "seed_mean_cv_accuracies": [
+            0.9866666666666667,
+            0.9866666666666667,
+            0.9866666666666667
+          ],
+          "all_seeds_eligible": true,
+          "eligible_seed_count": 3,
+          "mean_accuracy_across_seeds": 0.9866666666666667,
+          "sample_sd_across_seed_means": 0.0
+        },
+        {
+          "candidate_id": "candidate-004",
+          "params": {
+            "kernel": "rbf",
+            "lambd": 6.103515625e-05,
+            "retention_fraction": 0.25,
+            "gamma": 0.01
+          },
+          "roles": [
+            "best_coarse"
+          ],
+          "epochs": 200,
+          "seeds": [
+            42,
+            20261001,
+            314159
+          ],
+          "seed_mean_cv_accuracies": [
+            0.9816666666666667,
+            0.9850000000000001,
+            0.9833333333333334
+          ],
+          "all_seeds_eligible": true,
+          "eligible_seed_count": 3,
+          "mean_accuracy_across_seeds": 0.9833333333333334,
+          "sample_sd_across_seed_means": 0.0016666666666667052
+        },
+        {
+          "candidate_id": "candidate-005",
+          "params": {
+            "kernel": "rbf",
+            "lambd": 6.103515625e-05,
+            "retention_fraction": 0.05,
+            "gamma": 0.0316227766016838
+          },
+          "roles": [
+            "best_five_percent"
+          ],
+          "epochs": 200,
+          "seeds": [
+            42,
+            20261001,
+            314159
+          ],
+          "seed_mean_cv_accuracies": [
+            0.6483333333333334,
+            0.6799999999999999,
+            0.6650000000000001
+          ],
+          "all_seeds_eligible": true,
+          "eligible_seed_count": 3,
+          "mean_accuracy_across_seeds": 0.6644444444444445,
+          "sample_sd_across_seed_means": 0.015840641588203537
+        },
+        {
+          "candidate_id": "candidate-006",
+          "params": {
+            "kernel": "rbf",
+            "lambd": 1e-06,
+            "retention_fraction": 0.05,
+            "gamma": "scale"
+          },
+          "roles": [
+            "inherited_default"
+          ],
+          "epochs": 200,
+          "seeds": [
+            42,
+            20261001,
+            314159
+          ],
+          "seed_mean_cv_accuracies": [
+            0.6383333333333333,
+            0.6599999999999999,
+            0.6366666666666667
+          ],
+          "all_seeds_eligible": true,
+          "eligible_seed_count": 3,
+          "mean_accuracy_across_seeds": 0.645,
+          "sample_sd_across_seed_means": 0.013017082793177702
+        }
+      ]
+    },
+    "pair-7-8-larger-sample": {
+      "train_size": 2000,
+      "epochs": [
+        200
+      ],
+      "seeds": [
+        42,
+        20261001,
+        314159
+      ],
+      "candidate_count": 6,
+      "kernel_fold_fits": 90,
+      "groups": [
+        {
+          "candidate_id": "candidate-001",
+          "params": {
+            "kernel": "rbf",
+            "lambd": 0.0009765625,
+            "retention_fraction": 0.75,
+            "gamma": 0.0316227766016838
+          },
+          "roles": [
+            "screen_rank_1"
+          ],
+          "epochs": 200,
+          "seeds": [
+            42,
+            20261001,
+            314159
+          ],
+          "seed_mean_cv_accuracies": [
+            0.9935,
+            0.993,
+            0.993
+          ],
+          "all_seeds_eligible": true,
+          "eligible_seed_count": 3,
+          "mean_accuracy_across_seeds": 0.9931666666666666,
+          "sample_sd_across_seed_means": 0.0002886751345948452
+        },
+        {
+          "candidate_id": "candidate-002",
+          "params": {
+            "kernel": "rbf",
+            "lambd": 6.103515625e-05,
+            "retention_fraction": 0.25,
+            "gamma": 0.01
+          },
+          "roles": [
+            "best_coarse"
+          ],
+          "epochs": 200,
+          "seeds": [
+            42,
+            20261001,
+            314159
+          ],
+          "seed_mean_cv_accuracies": [
+            0.9945,
+            0.9945,
+            0.9945
+          ],
+          "all_seeds_eligible": true,
+          "eligible_seed_count": 3,
+          "mean_accuracy_across_seeds": 0.9945,
+          "sample_sd_across_seed_means": 0.0
+        },
+        {
+          "candidate_id": "candidate-003",
+          "params": {
+            "kernel": "rbf",
+            "lambd": 6.103515625e-05,
+            "retention_fraction": 0.05,
+            "gamma": 0.0316227766016838
+          },
+          "roles": [
+            "best_five_percent"
+          ],
+          "epochs": 200,
+          "seeds": [
+            42,
+            20261001,
+            314159
+          ],
+          "seed_mean_cv_accuracies": [
+            0.6689999999999999,
+            0.6765000000000001,
+            0.666
+          ],
+          "all_seeds_eligible": true,
+          "eligible_seed_count": 3,
+          "mean_accuracy_across_seeds": 0.6705,
+          "sample_sd_across_seed_means": 0.005408326913196035
+        },
+        {
+          "candidate_id": "candidate-004",
+          "params": {
+            "kernel": "rbf",
+            "lambd": 0.0009765625,
+            "retention_fraction": 0.3,
+            "gamma": 0.0316227766016838
+          },
+          "roles": [
+            "best_thirty_percent"
+          ],
+          "epochs": 200,
+          "seeds": [
+            42,
+            20261001,
+            314159
+          ],
+          "seed_mean_cv_accuracies": [
+            0.9955,
+            0.9955,
+            0.9960000000000001
+          ],
+          "all_seeds_eligible": true,
+          "eligible_seed_count": 3,
+          "mean_accuracy_across_seeds": 0.9956666666666667,
+          "sample_sd_across_seed_means": 0.0002886751345948452
+        },
+        {
+          "candidate_id": "candidate-005",
+          "params": {
+            "kernel": "rbf",
+            "lambd": 1e-06,
+            "retention_fraction": 0.3,
+            "gamma": "scale"
+          },
+          "roles": [
+            "inherited_default"
+          ],
+          "epochs": 200,
+          "seeds": [
+            42,
+            20261001,
+            314159
+          ],
+          "seed_mean_cv_accuracies": [
+            0.9945,
+            0.9949999999999999,
+            0.9949999999999999
+          ],
+          "all_seeds_eligible": true,
+          "eligible_seed_count": 3,
+          "mean_accuracy_across_seeds": 0.9948333333333332,
+          "sample_sd_across_seed_means": 0.000288675134594717
+        },
+        {
+          "candidate_id": "candidate-006",
+          "params": {
+            "kernel": "rbf",
+            "lambd": 1e-06,
+            "retention_fraction": 0.05,
+            "gamma": "scale"
+          },
+          "roles": [
+            "original_five_percent_control"
+          ],
+          "epochs": 200,
+          "seeds": [
+            42,
+            20261001,
+            314159
+          ],
+          "seed_mean_cv_accuracies": [
+            0.6699999999999999,
+            0.6799999999999999,
+            0.6735000000000001
+          ],
+          "all_seeds_eligible": true,
+          "eligible_seed_count": 3,
+          "mean_accuracy_across_seeds": 0.6745,
+          "sample_sd_across_seed_means": 0.005074445782546098
+        }
+      ]
+    }
+  },
+  "historical_control_note": "Earlier screen and budget-seed files name the lambda=1e-6, gamma=scale, 5% provisional control inherited_default. The corrected inherited default is 30%; the larger-sample check records both separately. Original records were not relabeled or overwritten.",
+  "interpretation": [
+    "Adaptive winning CV scores are development scores, not independent performance estimates.",
+    "Seeds change SGD randomness on fixed observations/folds, not independently sampled data replications.",
+    "Retention above 30% was checked at one frozen lambda/gamma pair, not a complete joint search.",
+    "Small-lambda ties at a fixed budget do not identify a unique regularization optimum.",
+    "Software defaults retain the inherited starting choices; the exploration does not establish a universal 75% default."
+  ],
+  "run_file_sha256": {
+    "pair-7-8-screen": {
+      "config.json": "d6c239712fb10d61f1385140bad395f0f57548357c5ab20d9898d43bd6186cb0",
+      "inherited-default-control.json": "427167f035a8fb2f7ab012863a515c429653cbe4d152ed074105b2bc98ab97ae",
+      "records.jsonl": "05ca79aa5bce59582b781da2c5de54bc46cc4ceb12f518ab78ba70df31ce3869",
+      "resource-receipt.json": "982c8a44fa913d12ffb276634921676e113c9b7488cd324608a50a7b5ea9c520",
+      "selection.json": "e26f38da43ef885ee9ae6db98fe8d395f285d8b24e748949c95818898f0ec952",
+      "splits.json": "073baf6a3dae8e83c5e87945b3dd5eb54dc33a6233ed628e22cc579091702364",
+      "stages.json": "6b683dc551bb506f53419bb418550903ad1c00506ef9f383d6e53b5daf7577b1",
+      "status.json": "175d4b8db1c085b822c54087cf899361ec1fc2cfc015bcb93bcccc1cdd953700"
+    },
+    "pair-7-8-refined": {
+      "config.json": "61dceab93eee5403d018f1ef114d95cde8d8bd29ffe2a19c96ba58f8eeba459e",
+      "inherited-default-control.json": "427167f035a8fb2f7ab012863a515c429653cbe4d152ed074105b2bc98ab97ae",
+      "records.jsonl": "bf3dc42c3f51f8315acb4f9a1f66fb02d0679923dc1301df1bff4dd55120ecb3",
+      "resource-receipt.json": "6da2ea398bc87d44e17ea17844a16ac4f47029ff997cce89eb99ddee1aaf32eb",
+      "selection.json": "c12834c8527fc56d9f72d97f8afcc695477a9f2c51a47f828429f48f27b164a3",
+      "splits.json": "073baf6a3dae8e83c5e87945b3dd5eb54dc33a6233ed628e22cc579091702364",
+      "stages.json": "db5326646079adde9fc3bd736b0426a01dc452011ce22c3ecec60655a96e13e3",
+      "status.json": "fbb9e2b21d156f53147885abf13e9a2dd6be81907d5b581802163674c2d6c75d"
+    },
+    "pair-7-8-retention": {
+      "config.json": "475d9c34e3957ef5b1787a70cbcb26281440f9fbd1cbb504a819c1aa04ea0432",
+      "inherited-default-control.json": "427167f035a8fb2f7ab012863a515c429653cbe4d152ed074105b2bc98ab97ae",
+      "records.jsonl": "3ab46d646151977a2c7c5a0af8391792a89fb3ce071d8cc80095b1597a256dfa",
+      "resource-receipt.json": "5beb96f5d9b77490a847cd92188f128babd575d2311043e275accedeb1c3f862",
+      "selection.json": "22b10de56288f19dddeb63bb01f657031bddd49903f817b9cc93f0235ed3f570",
+      "splits.json": "073baf6a3dae8e83c5e87945b3dd5eb54dc33a6233ed628e22cc579091702364",
+      "stages.json": "481abec1cedb641fab558550b0cdcbab421ac7e8efff974f8ef51400fea6dd50",
+      "status.json": "8773975e2358099c1c774e945e005d3d967ef9a44ed537e59f26d0a77c5e69f4"
+    },
+    "pair-7-8-budget-seeds": {
+      "bundle-e200-seed20261001.jsonl": "abde7fbd078eb3b8dc87b0666d201cfec4e075e504a6a9018ffcf1dae2754f93",
+      "bundle-e200-seed20261001.resource.json": "34345290699c81e2f0bcbf64df8c41bdb530fbe22b79ffdce0156f99aebca907",
+      "bundle-e200-seed314159.jsonl": "f1c687cbcedb231e2cd6bdaa1026168dcda41239a690123a571420c35c44535f",
+      "bundle-e200-seed314159.resource.json": "8942897e5186fb4f71634df7b44bd7e3f774615c05e3cfc039e6b082ba472de3",
+      "bundle-e200-seed42.jsonl": "f15e77f1d70b2ce4803717705206b3029cccdd99f8a190b55847dce61872c392",
+      "bundle-e200-seed42.resource.json": "5394e9dc1e3cae22e1e1af6e0d9d833f0431e31269208254cccac410420e55a5",
+      "bundle-e80-seed20261001.jsonl": "bf9f291faebab15b9e65854b204f1ea6432b6f849c79351dbe98789ceeb2c805",
+      "bundle-e80-seed20261001.resource.json": "2fd2b9952888d86c26444e189700771dfb2148dda14a53e40302023e985e4746",
+      "bundle-e80-seed314159.jsonl": "160ff49d4d985b44acf84da5441bd4aedb9c6c116db5cd2d78a412901c17a7b9",
+      "bundle-e80-seed314159.resource.json": "e5fb563fdc480acfe160654ae3b8c78d61a4bbdb1d79ebac99280450f376d526",
+      "bundle-e80-seed42.jsonl": "8f692c648123513c51b076a8eabcc100bd24493f8b6fc49c7c1d2f9a65bb2cc3",
+      "bundle-e80-seed42.resource.json": "317d8ee892725f31001c173cc9eeb7ffc6c74c4777e4e598574de6993646b9db",
+      "config.json": "a1aed49c9856421669066a3cef62842d1bbff55c6e5e8650d7abc465ad6a2249",
+      "records.jsonl": "b62f0bfac85bd8c6cd4f50f0527501d4341e7a9e5546e11ce483c4f7e0287033",
+      "resource-receipt.json": "b8904255afceb5607601e6f2cb93fc053bc59664811487c434ea584f81dea147",
+      "splits.json": "073baf6a3dae8e83c5e87945b3dd5eb54dc33a6233ed628e22cc579091702364",
+      "status.json": "6e8ed613c72ef356929b62227432498f9c17768dad6e0d728718fe88d009a61d",
+      "summary.json": "dfc6a64bca50f4e5ad37ddd95abb91fc5540646d6c15c331fe93f580ea0ca306",
+      "threadpools.json": "dfd5218add31b02f9574b06d79777af42ab046207eee5e21ef255ff5caf7c80d",
+      "worker-snapshot.py": "8a2c91d576855da270940a94e1b4561d40545bfee7e3689702cbb47aee74587e"
+    },
+    "pair-7-8-larger-sample": {
+      "bundle-e200-seed20261001.jsonl": "72e5fc038a7153f90b313679c12c3aa2e3088092c7cdd3f27cfe19ad5afba0e0",
+      "bundle-e200-seed20261001.resource.json": "8d406de2b595025ab136d82983b667de60627489ade65d82e4065d5c0ebbe7e4",
+      "bundle-e200-seed314159.jsonl": "ff86b207d2575478742a31e562dad63f9802973cc99e2f4cd10daf96fbba5414",
+      "bundle-e200-seed314159.resource.json": "69dd1d7ae56851b97a22556369a15346382a9c17a01dde92cf52abdecd7b948b",
+      "bundle-e200-seed42.jsonl": "c11c857237f4197ec17590f5dc387186d6005e599579e88d4715f04f56d7990a",
+      "bundle-e200-seed42.resource.json": "991f0e9877d14c2f2db7410026710bb3349ca22359e56346308898daa7483587",
+      "config.json": "cb57417d44be0d384ad7b5df4ee63ed543b23d5d4befe7a0ed556f49069e1d5f",
+      "records.jsonl": "927132bca8a9751c63b0c39f2920e3d96bfb6a1de24888d1826c5456364a1ebd",
+      "resource-receipt.json": "de08d568c248c90e404b97e17ef4485243b57faa7b49ad17bcc9e246ce064e85",
+      "splits.json": "26684f04f1bcd8ee63e669c720b5af16e0b78656f5707726d17bbdef92f83489",
+      "status.json": "e4130542be78526f0fe118f4f34e8d5e6c5cc7303103ae738f595e4c73e9236e",
+      "summary.json": "45068d4224b9f9bf57e1c36db1c1c69308b160282e8adaf41256519b3c7627e6",
+      "threadpools.json": "dfd5218add31b02f9574b06d79777af42ab046207eee5e21ef255ff5caf7c80d",
+      "worker-snapshot.py": "016775670afbbc1de199bdfe284e9047e24cf06c7703e164eca506c7bc4f6392"
+    }
+  }
+}

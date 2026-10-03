@@ -1,0 +1,61 @@
+{
+  "cff-version": "1.2.0",
+  "message": "Please cite this software version and Chang Cheng's dissertation, Chapter 3. Foundational DWD papers and the original scripts are listed in references.",
+  "type": "software",
+  "title": "two-stage-sgd-dwd: Two-Stage DWD via Stochastic Gradient Descent",
+  "version": "0.5.0",
+  "date-released": "2026-10-01",
+  "authors": [
+    {"family-names": "Cheng", "given-names": "Chang"}
+  ],
+  "abstract": "This package was developed from Chang Cheng's original two-stage SGD-DWD research scripts accompanying his dissertation. It implements the methodology in Chapter 3 using stochastic gradient descent (SGD): projected linear SGD followed by selection using absolute decision scores and RKHS kernel SGD.",
+  "keywords": ["distance-weighted discrimination", "two-stage classification", "kernel methods", "stochastic gradient descent"],
+  "references": [
+    {
+      "type": "thesis",
+      "title": "Overcoming the Curses of Dimensionality and Kernelization: Scalable DWD and Supervised NMF",
+      "authors": [{"family-names": "Cheng", "given-names": "Chang"}],
+      "institution": {"name": "Purdue University"},
+      "thesis-type": "Doctoral dissertation manuscript",
+      "year": 2026,
+      "notes": "Chapter 3, Our Earlier Attempt on Kernel DWD. Revised manuscript supplied October 1, 2026; the title page is dated December 2026."
+    },
+    {
+      "type": "article",
+      "title": "Distance-Weighted Discrimination",
+      "authors": [
+        {"family-names": "Marron", "given-names": "J. S."},
+        {"family-names": "Todd", "given-names": "Michael J."},
+        {"family-names": "Ahn", "given-names": "Jeongyoun"}
+      ],
+      "journal": "Journal of the American Statistical Association",
+      "volume": 102,
+      "issue": 480,
+      "start": 1267,
+      "end": 1271,
+      "year": 2007,
+      "doi": "10.1198/016214507000001120"
+    },
+    {
+      "type": "article",
+      "title": "Another Look at Distance-Weighted Discrimination",
+      "authors": [
+        {"family-names": "Wang", "given-names": "Boxiang"},
+        {"family-names": "Zou", "given-names": "Hui"}
+      ],
+      "journal": "Journal of the Royal Statistical Society: Series B (Statistical Methodology)",
+      "volume": 80,
+      "issue": 1,
+      "start": 177,
+      "end": 198,
+      "year": 2018,
+      "doi": "10.1111/rssb.12244"
+    },
+    {
+      "type": "software",
+      "title": "Original DWD Python scripts",
+      "authors": [{"family-names": "Cheng", "given-names": "Chang"}],
+      "notes": "2Stage_DWD.py; nonlinearDWD.py; DWDcodebook.py; importdata.py; two_stage_import.py; two_stage_import2.py; 4import.py; KernelDWD.py. Source filenames and SHA256 hashes are recorded in docs/provenance.json."
+    }
+  ]
+}
