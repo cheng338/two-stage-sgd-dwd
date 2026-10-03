@@ -5,9 +5,7 @@
 two-stage procedure first fits a linear classifier, then trains a kernel
 classifier on observations selected near the linear decision boundary.
 
-Author: Chang Cheng
-
-The package was developed from Chang Cheng's original research scripts
+Chang Cheng developed this package from his original research scripts
 accompanying his dissertation. The two-stage method follows Chapter 3,
 **"Our Earlier Attempt on Kernel DWD"**; see [Basis and citation](#basis-and-citation)
 for the full dissertation and software references.
