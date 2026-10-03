@@ -1,52 +1,29 @@
-# Two-stage SGD-DWD
+# Overview
+
+`two-stage-sgd-dwd` implements linear and kernel Distance Weighted Discrimination
+(DWD) for binary classification using stochastic gradient descent (SGD). Its
+two-stage procedure first fits a linear classifier, then trains a kernel
+classifier on observations selected near the linear decision boundary.
 
 Author: Chang Cheng
 
-This package was developed from Chang Cheng's original two-stage SGD-DWD research
-scripts accompanying his dissertation. It implements the methodology in
-Chapter 3 using stochastic gradient descent (SGD), with optional batch updates
-and kernel choices.
-Version 0.5.0 uses the same single `lambd` convention as `dwd`, with kernel
-choices and explicit cross-validation helpers.
-Independent sampling with replacement and batch size one remain the defaults,
-with optional averaged mini-batches and shuffled epochs. It includes its own
-DWD-specific SGD solvers. It does not
-call `dwd`, a SOCP solver, CVXPY, or scikit-learn's `SGDClassifier`.
+The package was developed from Chang Cheng's original research scripts
+accompanying his dissertation. The two-stage method follows Chapter 3,
+**"Our Earlier Attempt on Kernel DWD"**; see [Basis and citation](#basis-and-citation)
+for the full dissertation and software references.
 
-The three binary estimators are:
+The following methods are implemented:
 
 - `LinearSGDDWD`: unit-ball projected linear SGD with a separate free intercept.
-- `KernelSGDDWD`: RKHS SGD with penalty `lambd * ||h||^2`.
+- `KernelSGDDWD`: kernel SGD in an RKHS with penalty `lambd * ||h||^2`
+  and a free intercept.
 - `TwoStageDWDClassifier`: linear fit, global selection by absolute score,
   then kernel SGD on the selected subset.
 
-The package includes numerical verification, training-only tuning tools, and
-[MNIST development evidence](docs/mnist-exploration.md) for digits 7 and 8.
-Exploratory CV scores and checks across SGD seeds do not establish a screening
-advantage or replace replicated evaluation on independent data. The starting
-defaults are inherited choices, not universally optimal settings.
-Publication and licensing have not been decided.
+These are standalone DWD-specific SGD solvers. They do not call `dwd`, a SOCP
+solver, CVXPY, or scikit-learn's `SGDClassifier`.
 
-## Basis and citation
-
-The two-stage method is described in Chapter 3, **"Our Earlier Attempt on
-Kernel DWD,"** of:
-
-> Cheng, Chang (2026). *Overcoming the Curses of Dimensionality and
-> Kernelization: Scalable DWD and Supervised NMF*. Dissertation manuscript,
-> Purdue University, Department of Statistics. Chapter 3, revision of
-> October 1, 2026.
-
-When using the package, cite the software version and the dissertation:
-
-> Cheng, Chang (2026). *two-stage-sgd-dwd: Two-Stage DWD via Stochastic
-> Gradient Descent*, version 0.5.0 [Computer software].
-
-Machine-readable citations are provided in [CITATION.cff](CITATION.cff)
-and [BibTeX format](docs/references.bib). Input filenames and checksums are
-recorded in [the source provenance record](docs/provenance.json).
-
-## Installation
+# Installation
 
 Python 3.11 or newer is required. From this source directory:
 
@@ -61,7 +38,7 @@ Dependencies are NumPy, SciPy, and scikit-learn. Validation environments are
 documented in [VALIDATION.md](VALIDATION.md). The package does not require
 Conda or a particular BLAS vendor.
 
-## Example
+# Example
 
 ```python
 from two_stage_sgd_dwd import TwoStageDWDClassifier
@@ -79,7 +56,10 @@ print(model.selected_ids_, model.selected_class_counts_)
 print(model.stop_reason_, model.model_status_)
 ```
 
-## Kernel choice and parameter tuning
+# Kernel choice and parameter tuning
+
+Version 0.5.0 uses the same single `lambd` convention as `dwd`, with kernel
+choices and explicit cross-validation helpers.
 
 Linear and Gaussian/RBF kernels are the primary recommended choices. RBF is
 the default; polynomial, Laplacian, cosine, chi-square, and matrix callables
@@ -179,7 +159,7 @@ calibration; using it in the dissertation must be reported as a protocol
 change. Empirical selection and independent confirmation remain separate from
 these preset definitions.
 
-### Training-only adaptive MNIST tuning
+## Training-only adaptive MNIST tuning
 
 [examples/tune_mnist.py](examples/tune_mnist.py) runs an explicit search on a
 balanced subset of the official training partition. It divides pixels by 255
@@ -215,12 +195,21 @@ larger-budget and independent-seed checks remain part of assessing a candidate.
 The [recorded MNIST exploration](docs/mnist-exploration.md) includes these
 checks, a larger training sample, and an explicit focused follow-up grid.
 
+The package includes numerical verification, training-only tuning tools, and
+[MNIST development evidence](docs/mnist-exploration.md) for digits 7 and 8.
+Exploratory CV scores and checks across SGD seeds do not establish a screening
+advantage or replace replicated evaluation on independent data. The starting
+defaults are inherited choices, not universally optimal settings.
+
 See [statistical rationale and kernel details](docs/kernels-and-tuning.md)
 and the [small runnable search example](examples/kernel_search_example.py).
 An explicitly requested 5% on tiny folds may retain only one class; that is a
 recorded selection failure. The synthetic example uses the 30% retention default.
 
-## Single-observation, mini-batch, and full-batch updates
+# Single-observation, mini-batch, and full-batch updates
+
+Independent sampling with replacement and batch size one remain the defaults,
+with optional averaged mini-batches and shuffled epochs.
 
 All three estimators accept the same update controls:
 
@@ -266,7 +255,7 @@ update, and theory distinctions when describing optional batches or shuffling.
 No sampling-policy revision is needed to describe the unchanged default.
 The package remains **binary only**; multiclass DWD is not implemented here.
 
-## Data and labels
+# Data and labels
 
 Supply finite dense numeric features and exactly two class labels. Labels may
 be strings or numbers; `classes_[0]` maps internally to -1 and `classes_[1]`
@@ -288,7 +277,7 @@ failure, not an invitation to add observations or change the model. A
 `selected_ids_`, and class-count diagnostics; the two-stage predictor remains
 unfitted. The selected linear model remains available as a baseline.
 
-## Reproducibility and diagnostics
+# Reproducibility and diagnostics
 
 Each stage uses a private NumPy generator. Integer seeds, `Generator`, and
 legacy `RandomState` inputs are supported without mutating caller RNG state.
@@ -327,7 +316,7 @@ See [method and API notes](docs/method.md),
 [committee requirements](docs/committee-requirements.md), and
 [verification status](VALIDATION.md).
 
-## Local MNIST data
+# Local MNIST data
 
 ```python
 from two_stage_sgd_dwd.datasets import load_mnist_pair
@@ -340,3 +329,24 @@ The optional loader validates IDX headers, dimensions, counts, payload lengths,
 and digit labels; returns float64 pixels divided by 255; and records original
 partition/row IDs and source SHA256 hashes. It does not download data, make
 train/validation splits, or execute experiments at import time.
+
+# Basis and citation
+
+The two-stage method is described in Chapter 3, **"Our Earlier Attempt on
+Kernel DWD,"** of:
+
+> Cheng, Chang (2026). *Overcoming the Curses of Dimensionality and
+> Kernelization: Scalable DWD and Supervised NMF*. Dissertation manuscript,
+> Purdue University, Department of Statistics. Chapter 3, revision of
+> October 1, 2026.
+
+When using the package, cite the software version and the dissertation:
+
+> Cheng, Chang (2026). *two-stage-sgd-dwd: Two-Stage DWD via Stochastic
+> Gradient Descent*, version 0.5.0 [Computer software].
+
+Machine-readable citations are provided in [CITATION.cff](CITATION.cff)
+and [BibTeX format](docs/references.bib). Input filenames and checksums are
+recorded in [the source provenance record](docs/provenance.json).
+
+Publication and licensing have not been decided.
