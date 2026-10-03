@@ -29,9 +29,6 @@ Publication and licensing have not been decided.
 
 ## Basis and citation
 
-The original research scripts are:
-`2Stage_DWD.py`, `nonlinearDWD.py`, `DWDcodebook.py`, `importdata.py`,
-`two_stage_import.py`, `two_stage_import2.py`, `4import.py`, and `KernelDWD.py`.
 The two-stage method is described in Chapter 3, **"Our Earlier Attempt on
 Kernel DWD,"** of:
 
