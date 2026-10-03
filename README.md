@@ -7,8 +7,11 @@ classifier on observations selected near the linear decision boundary.
 
 Chang Cheng developed this package from his original research scripts
 accompanying his dissertation. The two-stage method follows Chapter 3,
-**"Our Earlier Attempt on Kernel DWD"**; see [Basis and citation](#basis-and-citation)
-for the full dissertation and software references.
+**"Our Earlier Attempt on Kernel DWD"**, of:
+
+> Cheng, Chang (2026). *Overcoming the Curses of Dimensionality and
+> Kernelization: Scalable DWD and Supervised NMF*. Doctoral dissertation
+> manuscript, Purdue University, Department of Statistics.
 
 The following methods are implemented:
 
@@ -18,7 +21,7 @@ The following methods are implemented:
 - `TwoStageDWDClassifier`: linear fit, global selection by absolute score,
   then kernel SGD on the selected subset.
 
-These are standalone DWD-specific SGD solvers. They do not call `dwd`, a SOCP
+The package implements its own SGD solvers. It does not call `dwd`, a SOCP
 solver, CVXPY, or scikit-learn's `SGDClassifier`.
 
 # Installation
@@ -56,9 +59,6 @@ print(model.stop_reason_, model.model_status_)
 
 # Kernel choice and parameter tuning
 
-Version 0.5.0 uses the same single `lambd` convention as `dwd`, with kernel
-choices and explicit cross-validation helpers.
-
 Linear and Gaussian/RBF kernels are the primary recommended choices. RBF is
 the default; polynomial, Laplacian, cosine, chi-square, and matrix callables
 are available for problems where their geometry is appropriate. Supporting a
@@ -72,7 +72,7 @@ Two-stage fitting resolves scale on the complete training fold before selecting
 rows. The default is `gamma="scale"`, as in `ensemble-dwd`; it is a
 data-dependent starting value, not a statistically optimal bandwidth guarantee.
 
-`lambd` is the sole regularization parameter and means
+`lambd` is the sole regularization parameter in version 0.5.0 and means
 `mean_loss + lambd * ||h||^2`, as in `dwd`. Python reserves the word `lambda`,
 so the argument is spelled `lambd`. Its default is **1e-6**, matching the
 ensemble package's starting value. The fitted value is `lambd_`.
@@ -154,8 +154,8 @@ The grid is never silently applied by `make_search`. The estimator's direct-fit
 retention default is 30%, but this search treats retention as a tuning
 parameter. This is an alternative to the implementation guide's fixed-5%, nine-candidate
 calibration; using it in the dissertation must be reported as a protocol
-change. Empirical selection and independent confirmation remain separate from
-these preset definitions.
+change. Select parameters using training data, then evaluate their performance
+on independent data as described above.
 
 ## Training-only adaptive MNIST tuning
 
@@ -182,19 +182,17 @@ complete expansion rounds without improvement stop further expansion.
 Every proposed round covers all five fixed retention fractions; failed or
 previously evaluated candidates are not retried automatically. Earlier
 exploratory runs used an explicit 5% provisional control; their records retain
-that setting. The 30% software default aligns with the ensemble package and
-does not promote an empirical winner.
+that setting. The 30% software default aligns with the ensemble package;
+this alignment does not establish 30% as the best-performing retention.
 
-Saved folds, settings, candidate records, and selection diagnostics make the
-exploration inspectable and resumable with `--resume`. Boundary winners,
-budget limits, and plateaus remain explicit. A CV winner or plateau at a fixed
+The runner saves folds, settings, candidate records, and selection diagnostics
+for inspection and supports resuming with `--resume`. It reports boundary
+winners, budget limits, and plateaus. A CV winner or plateau at a fixed
 epoch budget does not establish an optimal default or optimizer convergence;
 larger-budget and independent-seed checks remain part of assessing a candidate.
-The [recorded MNIST exploration](docs/mnist-exploration.md) includes these
-checks, a larger training sample, and an explicit focused follow-up grid.
-
-The package includes numerical verification, training-only tuning tools, and
-[MNIST development evidence](docs/mnist-exploration.md) for digits 7 and 8.
+The [recorded MNIST exploration](docs/mnist-exploration.md) for digits 7 and 8
+includes numerical verification, these training-only checks, a larger training
+sample, and a focused follow-up grid.
 Exploratory CV scores and checks across SGD seeds do not establish a screening
 advantage or replace replicated evaluation on independent data. The starting
 defaults are inherited choices, not universally optimal settings.
@@ -205,9 +203,6 @@ An explicitly requested 5% on tiny folds may retain only one class; that is a
 recorded selection failure. The synthetic example uses the 30% retention default.
 
 # Single-observation, mini-batch, and full-batch updates
-
-Independent sampling with replacement and batch size one remain the defaults,
-with optional averaged mini-batches and shuffled epochs.
 
 All three estimators accept the same update controls:
 
@@ -269,9 +264,9 @@ the fitted training transformer; sklearn Pipeline does not transform that
 fit argument automatically. The prescribed MNIST division requires no fitted
 transformer.
 
-For a very small training set, 5% may retain only one class. That is a recorded
-failure, not an invitation to add observations or change the model. A
-`SelectionError` preserves `linear_estimator_`, `selected_indices_`,
+For a very small training set, 5% may retain only one class. The estimator
+reports this selection failure without adding observations or changing the model.
+A `SelectionError` preserves `linear_estimator_`, `selected_indices_`,
 `selected_ids_`, and class-count diagnostics; the two-stage predictor remains
 unfitted. The selected linear model remains available as a baseline.
 
@@ -287,9 +282,9 @@ Standalone solvers record initial, final, and selected states as independent
 copies; separate optimizer-update and processed-observation counts; the
 numerical learning-rate bound; validation
 history; RNG state; timing; and stopping/model status. The two-stage object
-exposes both fitted stage objects. No elapsed-time cap is imposed by default
-for package development. Optional `max_seconds` and `linear_max_seconds` support
-later bounded experiments; a capped fit is not declared converged.
+exposes both fitted stage objects. There is no elapsed-time cap by default.
+Set `max_seconds` or `linear_max_seconds` to impose one; a capped fit is not
+declared converged.
 
 `fit(..., checkpoint_callback=callback)` supplies independent state and metric
 dictionaries at initialization and completed validation checkpoints. For the
@@ -330,15 +325,9 @@ train/validation splits, or execute experiments at import time.
 
 # Basis and citation
 
-The two-stage method is described in Chapter 3, **"Our Earlier Attempt on
-Kernel DWD,"** of:
-
-> Cheng, Chang (2026). *Overcoming the Curses of Dimensionality and
-> Kernelization: Scalable DWD and Supervised NMF*. Dissertation manuscript,
-> Purdue University, Department of Statistics. Chapter 3, revision of
-> October 1, 2026.
-
-When using the package, cite the software version and the dissertation:
+The implementation follows Chapter 3 of the October 1, 2026 manuscript revision
+cited in the [overview](#overview). When using the package, cite the dissertation
+and the software version:
 
 > Cheng, Chang (2026). *two-stage-sgd-dwd: Two-Stage DWD via Stochastic
 > Gradient Descent*, version 0.5.0 [Computer software].
