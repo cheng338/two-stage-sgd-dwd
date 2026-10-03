@@ -196,6 +196,9 @@ times need not sum to total fitting time. `kernel_evaluation_count_` counts
 individual kernel values in completed kernel calls during fitting, including
 completed validation blocks before a cap. Prediction and separately requested
 norm/objective diagnostics are excluded from this fitting counter.
+With optional lazy training-column reuse, cache hits perform no kernel
+evaluation and do not increase this counter. Cache payload capacity, peak
+retained bytes, hits, misses, and evictions have separate diagnostics.
 
 Kernel preparation is recorded separately in `kernel_preparation_seconds_`,
 `kernel_preparation_evaluation_count_`, and `kernel_validation_`; the combined
@@ -205,6 +208,21 @@ An interrupted non-RBF preparation raises `TrainingError` with status
 `kernel_preparation_timeout` because validation has not completed.
 RBF's diagonal is known to be one and can safely return the usual zero-update
 diagnostic if its cap expires before any optimizer step.
+
+The default execution settings are `optimizer_backend="python"` and
+`kernel_cache_bytes=0` on kernel and two-stage estimators. The linear estimator
+accepts the backend setting but has no kernel-cache parameter. Optional native
+scalar execution preserves the update definitions and scalar sampling stream;
+it is restricted to fixed-epoch, single-observation fits without validation,
+callbacks, or time caps, using contiguous aligned feature arrays and analytic
+built-in kernels. `"auto"` records a Python fallback for unsupported settings;
+`"native"` rejects them. Each two-stage component records its actual backend.
+
+Lazy column storage is fit-local, bounded by retained array payload, and
+populated only when an update requests a column. It does not reuse a fitted
+model across repetitions. Failed numerical fits remain failed under either
+backend; no older iterate is silently used as a successful fallback. See
+[execution controls and timing scope](optimizer-backends.md).
 
 ## Relationship to the previous packages
 

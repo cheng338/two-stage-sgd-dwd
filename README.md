@@ -6,7 +6,7 @@ This package was developed from Chang Cheng's original two-stage SGD-DWD researc
 scripts accompanying his dissertation. It implements the methodology in
 Chapter 3 using stochastic gradient descent (SGD), with optional batch updates
 and kernel choices.
-Development version 0.6.0.dev20261003 uses the same single `lambd` convention as `dwd`, with kernel
+Development version 0.7.0.dev20261003 uses the same single `lambd` convention as `dwd`, with kernel
 choices and explicit cross-validation helpers.
 Independent sampling with replacement and batch size one remain the defaults,
 with optional averaged mini-batches and shuffled epochs. It includes its own
@@ -40,7 +40,7 @@ Kernel DWD,"** of:
 When using the package, cite the software version and the dissertation:
 
 > Cheng, Chang (2026). *two-stage-sgd-dwd: Two-Stage DWD via Stochastic
-> Gradient Descent*, development version 0.6.0.dev20261003 [Computer software].
+> Gradient Descent*, development version 0.7.0.dev20261003 [Computer software].
 
 Machine-readable citations are provided in [CITATION.cff](CITATION.cff)
 and [BibTeX format](docs/references.bib). Input filenames and checksums are
@@ -60,6 +60,13 @@ python examples/synthetic_example.py
 Dependencies are NumPy, SciPy, and scikit-learn. Validation environments are
 documented in [VALIDATION.md](VALIDATION.md). The package does not require
 Conda or a particular BLAS vendor.
+
+The compiled scalar optimizer is optional. A compatible native wheel includes
+it; a source build needs a suitable C compiler to build it. Setting the build
+environment variable `SGD_BUILD_ACCEL=0` requests a portable Python-only build.
+The Python backend remains the default in either distribution. Native binary
+availability depends on the operating system and architecture; see
+[backend and cache details](docs/optimizer-backends.md).
 
 ## Example
 
@@ -275,6 +282,74 @@ batch policy. The optimizer's `batch_size` is separate from
 kernel updates use bounded scoring blocks with frozen parameters and retain
 no full Gram cache. An interrupted batch is not partially committed.
 
+## Optimizer backends and lazy kernel columns
+
+All three estimators accept `optimizer_backend="python"` by default.
+`"auto"` selects the optional compiled scalar optimizer when supported and
+otherwise uses Python. `"native"` requires the compiled optimizer: unsupported
+fitting controls raise `ValueError`, and an unavailable extension raises
+`ImportError`.
+
+The native path requires `batch_size=1`, C-contiguous aligned feature arrays,
+and no `validation_data`, `checkpoint_callback`, or time limit. This includes
+`max_seconds` and, for the two-stage linear fit, `linear_max_seconds`. Supplying
+validation data is unsupported even when `stopping="fixed"`. Both independent
+sampling with replacement and shuffled epochs are supported. Native kernel
+fits require the analytic built-in kernels listed below. Other configurations
+continue to work with `"python"` or an automatic Python fallback.
+
+`optimizer_backend_` records the actual backend and
+`optimizer_backend_reason_` records why it was selected. The two-stage model
+applies the requested setting to both stages, exposes their individual
+diagnostics, and reports `"mixed"` when their actual backends differ. A native
+numerical failure invalidates the fit; it is not retried using Python.
+
+For repeated single-observation kernel updates, `KernelSGDDWD` and
+`TwoStageDWDClassifier` optionally reuse training kernel columns:
+
+```python
+model = TwoStageDWDClassifier(
+    batch_size=1, kernel="rbf", kernel_cache_bytes=64 * 1024**2,
+    optimizer_backend="auto", random_state=17,
+)
+```
+
+The default `kernel_cache_bytes=0` disables caching. A positive integer is a
+byte limit on retained float64 column array payload. Each column is computed
+only when its training observation is drawn, using the original column
+calculation. Later draws reuse it while retained; the least recently used
+column is evicted when storage is full. Nothing precomputes a full Gram matrix,
+and all cached arrays are released when fitting exits, including failed fits.
+A limit smaller than one column stores no columns. Python metadata, allocator
+overhead, kernel working memory, and the rest of the model are outside this
+payload limit.
+
+Enabled caching requires `batch_size=1` and one of `linear`, `rbf`, `poly`,
+`polynomial`, `laplacian`, `cosine`, or `chi2`. Other batch modes and kernels
+remain available with the default zero cache. Validation and prediction use
+their existing bounded blocks and are not cached. The two-stage cache applies
+only to its retained kernel training set; the linear stage is unchanged.
+
+Cache diagnostics are `kernel_cache_hits_`, `kernel_cache_misses_`,
+`kernel_cache_evictions_`, `kernel_cache_peak_bytes_`, and
+`kernel_cache_capacity_columns_`; they are also available on the two-stage
+estimator and in its kernel-stage diagnostics. Disabled-cache counters are zero.
+`kernel_evaluation_count_` counts values actually computed during optimization
+and validation, so a cache hit does not increase it. Kernel preparation counts
+remain separate. At fixed data, settings, seed, and update budget, cache reuse
+preserves the update sequence and values. A wall-time limit can stop faster and
+slower implementations at different updates; it is not an equality guarantee.
+
+These controls do not change the SGD objective, sampling policy, or number of
+updates. Correctness checks compare complete fitted results and RNG state in
+the same numerical environment. They do not promise the same runtime or
+bitwise agreement across different BLAS libraries, thread settings, hardware,
+or compilers. Assess speed with complete cold fits, including preprocessing,
+screening, kernel preparation, lazy cache filling, and prediction as applicable.
+Scalar-update microbenchmarks alone do not establish an end-to-end advantage.
+See [backend and cache details](docs/optimizer-backends.md) for limits and
+verification scope.
+
 The dissertation currently states independent single-point sampling. See the
 [alignment note](docs/dissertation-batch-alignment.md) for the required sampling,
 update, and theory distinctions when describing optional batches or shuffling.
@@ -336,7 +411,9 @@ Each stage uses a private NumPy generator. Integer seeds, `Generator`, and
 legacy `RandomState` inputs are supported without mutating caller RNG state.
 The two-stage estimator records `stage_seeds_` for linear SGD, kernel SGD, and
 selection ties. Optional unique `observation_ids` are preserved with selection.
-No kernel row or Gram cache is retained. Public prediction uses bounded blocks.
+No kernel row or Gram cache is retained after fitting. Optional lazy training
+column storage is bounded by `kernel_cache_bytes`; public prediction uses
+bounded blocks.
 
 Standalone solvers record initial, final, and selected states as independent
 copies; separate optimizer-update and processed-observation counts; the

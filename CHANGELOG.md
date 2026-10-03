@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased - 0.6.0.dev20261003
+## Unreleased - 0.7.0.dev20261003
+
+- Add optional fit-local lazy training kernel-column reuse with a byte-bounded
+  LRU cache. Keep caching disabled by default, preserve single-observation
+  update arithmetic, and report cache usage and actual kernel evaluations.
+- Add an optional compiled scalar optimizer with `optimizer_backend` choices
+  `python` (default), `auto`, and `native`. Report automatic fallback reasons;
+  reject unsupported forced-native fits and preserve numerical failures.
+  Support fixed-epoch, single-observation fits without validation, callbacks,
+  or wall-time limits. Keep portable Python-only builds available.
+
+## Unreleased development baseline - 0.6.0.dev20261003
 
 - Add explicit fixed-epoch and validation-patience stopping controls, with
   separate cap, model usability, CV eligibility, and optimality diagnostics.

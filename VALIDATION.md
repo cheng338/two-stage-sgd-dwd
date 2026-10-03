@@ -1,4 +1,33 @@
-# Development verification — 0.6.0.dev20261003
+# Development verification — 0.7.0.dev20261003
+
+The separately installed native Windows wheel passed **405 tests and 5,531
+subtests**. The separately installed portable wheel passed **387 tests and
+2,891 subtests**, with 18 native-only tests skipped because that wheel does
+not include the extension. Both were tested with Python 3.12.14 in
+`py12_df_aocl`, one native thread, and verified installed import paths.
+Each suite produced one expected warning from a deliberately invalid-label
+fixture. No correctness-test failures occurred.
+
+The local unpublished 0.7.0 development source passed **405 tests and 5,531
+subtests** with the optional native extension present. This source result does
+not substitute for a separately installed native or portable wheel check.
+
+The optional native optimizer and lazy kernel-column cache have focused
+synthetic checks in `tests/test_native_optimizer.py` and
+`tests/test_kernel_cache.py`. They compare coefficients, intercepts, selected
+observations, update counts, and RNG state against the Python path, including
+replacement sampling, shuffled epochs, and cache eviction. Additional checks
+cover unsupported-mode fallback, native errors, failed-update RNG restoration,
+fit-local cleanup, serialization, and payload limits. These checks concern
+correctness in the tested numerical environment; they do not establish a
+full-fit speed advantage or cross-platform bitwise agreement.
+
+Native availability is optional. Full source and installed-distribution
+validation for a particular build must record whether the extension was
+present and which backend actually ran. The earlier source/wheel results
+below are retained with their original version scope.
+
+## Development baseline verification — 0.6.0.dev20261003
 
 The October 3, 2026 development branch adds explicit stopping diagnostics and
 adaptive-search qualification. The source suite and a separately installed

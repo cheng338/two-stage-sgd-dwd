@@ -12,7 +12,8 @@ from sklearn.utils.validation import check_array, check_is_fitted, validate_data
 
 from ._core import (dwd_loss, kernel_batch_step, kernel_step, linear_batch_step,
                     linear_step, rbf_kernel, select_near_boundary)
-from ._kernels import resolve_kernel
+from ._cache import LazyKernelColumnCache
+from ._kernels import _TRUSTED, resolve_kernel
 
 
 class TrainingError(RuntimeError):
@@ -97,9 +98,29 @@ def _controls(est):
         raise ValueError("sampling must be 'shuffle' or 'with_replacement'")
     if not isinstance(est.stopping, str) or est.stopping not in ("auto", "fixed", "validation"):
         raise ValueError("stopping must be 'auto', 'fixed', or 'validation'")
+    if not isinstance(est.optimizer_backend, str) or est.optimizer_backend not in ("python", "auto", "native"):
+        raise ValueError("optimizer_backend must be 'python', 'auto', or 'native'")
+    est.optimizer_backend_, est.optimizer_backend_reason_ = "unrun", "not_started"
     if est.max_seconds is not None:
         _positive(est.max_seconds, "max_seconds")
     _generator(est.random_state)
+
+
+_CACHE_DIAGNOSTICS = ("kernel_cache_hits_", "kernel_cache_misses_",
+                      "kernel_cache_evictions_", "kernel_cache_peak_bytes_",
+                      "kernel_cache_capacity_columns_")
+
+
+def _cache_controls(est):
+    _integer(est.kernel_cache_bytes, "kernel_cache_bytes", 0)
+    for name in _CACHE_DIAGNOSTICS:
+        setattr(est, name, 0)
+    if est.kernel_cache_bytes:
+        if est.batch_size != 1:
+            raise ValueError("Positive kernel_cache_bytes requires batch_size=1")
+        if not isinstance(est.kernel, str) or est.kernel not in _TRUSTED:
+            raise ValueError("Positive kernel_cache_bytes requires an analytic built-in kernel: "
+                             "linear, rbf, poly, polynomial, laplacian, cosine, or chi2")
 
 
 def _resolve_stopping(est, validation):
@@ -143,7 +164,8 @@ _STAGE_DIAGNOSTICS = (
     "iteration_limit_reached_", "time_limit_reached_", "cap_reached_",
     "fit_usable_", "cv_eligible_", "checkpoint_selection_",
     "optimality_checked_", "optimality_met_", "converged_", "model_status_",
-)
+    "optimizer_backend_", "optimizer_backend_reason_",
+) + _CACHE_DIAGNOSTICS
 
 
 def _two_stage_diagnostics(est):
@@ -173,6 +195,13 @@ def _two_stage_diagnostics(est):
     est.time_limit_reached_ = (est.stop_reason_ in ("time_cap", "time_cap_no_validation") or
                                any(getattr(model, "time_limit_reached_", False) for model in models))
     est.cap_reached_ = est.iteration_limit_reached_ or est.time_limit_reached_
+    for name in _CACHE_DIAGNOSTICS:
+        setattr(est, name, getattr(models[1], name, 0))
+    backends = [getattr(model, "optimizer_backend_", "unrun") for model in models]
+    est.optimizer_backend_ = backends[0] if backends[0] == backends[1] else "mixed"
+    est.optimizer_backend_reason_ = {
+        stage: getattr(model, "optimizer_backend_reason_", "not_started")
+        for stage, model in zip(("linear", "kernel"), models)}
 
 
 def _clear(est):
@@ -239,6 +268,27 @@ def _snapshot(coefficients, intercept, iteration, rng, samples_seen=None):
 
 
 def _optimize(kind, X, y, validation, rng, est, deadline, callback=None):
+    # The cache never becomes part of a fitted model or callback snapshot.
+    # A finally block also releases entries on unexpected callback failures.
+    cache = (LazyKernelColumnCache(est.kernel_cache_bytes, len(y))
+             if kind == "kernel" and est.kernel_cache_bytes else None)
+    try:
+        from ._native_optimizer import optimize, resolve_backend
+        native = resolve_backend(kind, X, validation, est, deadline, callback)
+        result = (_optimize_steps(kind, X, y, validation, rng, est, deadline, callback, cache)
+                  if native is None else optimize(kind, X, y, rng, est, native, cache))
+        if cache is not None:
+            result.update(cache.diagnostics())
+        return result
+    finally:
+        if cache is not None:
+            cache.clear()
+            for name, value in cache.diagnostics().items():
+                setattr(est, name, value)
+
+
+def _optimize_steps(kind, X, y, validation, rng, est, deadline, callback=None,
+                    column_cache=None):
     began = time.perf_counter()
     m = len(y)
     full_batch = isinstance(est.batch_size, str) and est.batch_size == "full"
@@ -288,8 +338,14 @@ def _optimize(kind, X, y, validation, rng, est, deadline, callback=None):
                         new_coefficients, new_intercept = linear_step(coefficients, intercept,
                                                                       X[i], y[i], eta)
                     else:
-                        k = _kernel_values(X, X[i:i + 1], est.gamma_, est._kernel_spec_)[:, 0]
-                        kernel_counter[0] += m
+                        if column_cache is None:
+                            k = _kernel_values(X, X[i:i + 1], est.gamma_, est._kernel_spec_)[:, 0]
+                            kernel_counter[0] += m
+                        else:
+                            k, hit = column_cache.get(i, lambda: _kernel_values(
+                                X, X[i:i + 1], est.gamma_, est._kernel_spec_)[:, 0])
+                            if not hit:
+                                kernel_counter[0] += m
                         new_coefficients, new_intercept = kernel_step(
                             coefficients, intercept, k, i, y[i], eta, est.lambd_)
                 else:
@@ -399,6 +455,7 @@ class _BaseDWD(ClassifierMixin, BaseEstimator):
         if kind == "kernel":
             _penalty(self)
             _integer(self.prediction_batch_size, "prediction_batch_size")
+            _cache_controls(self)
         if callback is not None and not callable(callback):
             raise ValueError("checkpoint_callback must be callable or None")
         X, original_y, encoded, validation = _training_data(self, X, y, validation_data)
@@ -488,10 +545,17 @@ class LinearSGDDWD(_BaseDWD):
     n_epochs_completed_ counts processed observations divided by fitting size.
     criterion_reached_ reports the named termination_criterion_, never
     optimality. converged_=False is accompanied by optimality_checked_=False.
+
+    optimizer_backend='python' is the default. 'auto' uses the optional native
+    extension only for batch_size=1, contiguous aligned features, and no
+    validation, deadline or callback; otherwise it records a Python fallback.
+    'native' requires that supported configuration and an installed extension.
+    optimizer_backend_ and optimizer_backend_reason_ describe the actual path.
     """
     def __init__(self, *, batch_size=1, sampling="with_replacement", max_epochs=200,
                  validation_interval=5, patience=3,
-                 min_epochs=10, tol=1e-4, stopping="auto", random_state=None, max_seconds=None):
+                 min_epochs=10, tol=1e-4, stopping="auto", random_state=None, max_seconds=None,
+                 optimizer_backend="python"):
         self.batch_size = batch_size
         self.sampling = sampling
         self.max_epochs = max_epochs
@@ -502,6 +566,7 @@ class LinearSGDDWD(_BaseDWD):
         self.stopping = stopping
         self.random_state = random_state
         self.max_seconds = max_seconds
+        self.optimizer_backend = optimizer_backend
 
     def fit(self, X, y, *, validation_data=None, checkpoint_callback=None):
         """Fit from zero; optional callback receives independent state/metric copies."""
@@ -536,12 +601,22 @@ class KernelSGDDWD(_BaseDWD):
     updates, not MM iterations; n_epochs_completed_ records sample-equivalent
     epochs. Explicit validation data also select the best checkpoint when
     stopping='fixed', which disables only patience-based early stopping.
+
+    kernel_cache_bytes=0 disables training-column caching. A positive integer
+    enables fit-local lazy LRU reuse for batch_size=1 and analytic built-in
+    kernels only. The byte limit covers retained float64 column array payload,
+    not Python metadata or kernel working memory. No Gram matrix is computed
+    up front, and cached arrays are released when fitting exits. Fixed-budget
+    updates are unchanged; wall-time-limited fits may reach a different update.
+    optimizer_backend follows LinearSGDDWD. The native path additionally
+    requires an analytic built-in kernel; automatic fallback is reported.
     """
     def __init__(self, *, lambd=1e-6, kernel="rbf", gamma="scale",
                  kernel_kws=None, batch_size=1,
                  sampling="with_replacement", max_epochs=200,
                  validation_interval=5, patience=3, min_epochs=10, tol=1e-4,
-                 stopping="auto", random_state=None, max_seconds=None, prediction_batch_size=256):
+                 stopping="auto", random_state=None, max_seconds=None, prediction_batch_size=256,
+                 kernel_cache_bytes=0, optimizer_backend="python"):
         self.lambd = lambd
         self.kernel = kernel
         self.gamma = gamma
@@ -557,6 +632,8 @@ class KernelSGDDWD(_BaseDWD):
         self.random_state = random_state
         self.max_seconds = max_seconds
         self.prediction_batch_size = prediction_batch_size
+        self.kernel_cache_bytes = kernel_cache_bytes
+        self.optimizer_backend = optimizer_backend
 
     def fit(self, X, y, *, validation_data=None, checkpoint_callback=None):
         return self._fit(X, y, validation_data, "kernel", checkpoint_callback)
@@ -610,13 +687,18 @@ class TwoStageDWDClassifier(_BaseDWD):
     returned_iteration_, n_epochs_completed_ and optimality flags are arrays in
     linear, kernel order. Aggregate cv_eligible_ requires both stages to be
     usable without wall-time truncation. A reached criterion is not optimality.
+    kernel_cache_bytes optionally bounds lazy kernel-stage column storage as
+    in KernelSGDDWD; the linear stage does not use this cache.
+    optimizer_backend applies to both stages. stage_diagnostics_ reports each
+    actual backend; optimizer_backend_ is 'mixed' if stage paths differ.
     """
     def __init__(self, *, retention_fraction=0.3, lambd=1e-6,
                  kernel="rbf", gamma="scale", kernel_kws=None,
                  batch_size=1, sampling="with_replacement",
                  max_epochs=200, validation_interval=5, patience=3, min_epochs=10,
                  tol=1e-4, stopping="auto", random_state=None, max_seconds=None,
-                 linear_max_seconds=None, prediction_batch_size=256):
+                 linear_max_seconds=None, prediction_batch_size=256, kernel_cache_bytes=0,
+                 optimizer_backend="python"):
         self.retention_fraction = retention_fraction
         self.lambd = lambd
         self.kernel = kernel
@@ -634,6 +716,8 @@ class TwoStageDWDClassifier(_BaseDWD):
         self.max_seconds = max_seconds
         self.linear_max_seconds = linear_max_seconds
         self.prediction_batch_size = prediction_batch_size
+        self.kernel_cache_bytes = kernel_cache_bytes
+        self.optimizer_backend = optimizer_backend
 
     def fit(self, X, y, *, validation_data=None, observation_ids=None,
             checkpoint_callback=None):
@@ -645,6 +729,7 @@ class TwoStageDWDClassifier(_BaseDWD):
             raise ValueError("retention_fraction must be <= 1")
         _penalty(self)
         _integer(self.prediction_batch_size, "prediction_batch_size")
+        _cache_controls(self)
         if self.linear_max_seconds is not None:
             _positive(self.linear_max_seconds, "linear_max_seconds")
         if checkpoint_callback is not None and not callable(checkpoint_callback):
@@ -665,7 +750,7 @@ class TwoStageDWDClassifier(_BaseDWD):
                       max_epochs=self.max_epochs,
                       validation_interval=self.validation_interval,
                       patience=self.patience, min_epochs=self.min_epochs, tol=self.tol,
-                      stopping=self.stopping)
+                      stopping=self.stopping, optimizer_backend=self.optimizer_backend)
         self.linear_estimator_ = LinearSGDDWD(**common,
             random_state=self.stage_seeds_["linear_sgd"], max_seconds=self.linear_max_seconds)
         def callback_for(stage):
@@ -720,7 +805,8 @@ class TwoStageDWDClassifier(_BaseDWD):
         kernel = KernelSGDDWD(**common, lambd=self.lambd_,
             kernel=self.kernel_, gamma=self.gamma_ if self.gamma_ is not None else self.gamma,
             kernel_kws=copy.deepcopy(self._kernel_input_kws_),
-            random_state=self.stage_seeds_["kernel_sgd"], prediction_batch_size=self.prediction_batch_size)
+            random_state=self.stage_seeds_["kernel_sgd"], prediction_batch_size=self.prediction_batch_size,
+            kernel_cache_bytes=self.kernel_cache_bytes)
         # Keep the kernel object for diagnostics after failures; fittedness is
         # controlled explicitly, never inferred from the existence of this object.
         self.kernel_estimator_ = kernel

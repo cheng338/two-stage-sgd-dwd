@@ -1,0 +1,18 @@
+include README.md
+include CHANGELOG.md
+include VALIDATION.md
+include CITATION.cff
+include pyproject.toml
+include setup.py
+recursive-include src/two_stage_sgd_dwd *.py *.c
+recursive-include docs *
+recursive-include examples *
+recursive-include tests *
+prune build
+prune dist
+prune .pytest_cache
+prune .venv
+prune zig-local-cache
+prune zig-global-cache
+prune outputs
+global-exclude __pycache__ *.py[cod] *.pyd *.so *.dll *.lib *.obj *.exp *.pdb

@@ -245,7 +245,16 @@ certify a custom function on unobserved inputs; symmetric PSD behavior over
 its intended domain remains the caller's contract.
 
 No Gram matrix is retained after preparation. Training and prediction then
-evaluate bounded blocks on demand. The SGD bound uses the maximum diagonal
+evaluate bounded blocks on demand. Optional `kernel_cache_bytes` stores only
+training columns requested by single-observation updates, within a fixed
+payload limit, and releases them when fitting exits. It is disabled by default
+and restricted to the analytic built-in families, so enabling it does not
+introduce an up-front training Gram computation. It is independent of the
+MNIST runner's within-fold first-stage reuse. The optional native optimizer
+likewise requires analytic built-ins for kernel fits; other kernels use the
+Python backend. See [backend controls](optimizer-backends.md).
+
+The SGD bound uses the maximum diagonal
 on the actual kernel fitting subset, so changing kernels also changes the
 safe step-size constant. Preparation time/work is reported separately from
 optimizer and checkpoint work. A precomputed kernel is unsupported because
