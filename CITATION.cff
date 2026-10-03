@@ -3,8 +3,7 @@
   "message": "Please cite this software version and Chang Cheng's dissertation, Chapter 3.",
   "type": "software",
   "title": "two-stage-sgd-dwd: Two-Stage DWD via Stochastic Gradient Descent",
-  "version": "0.5.0",
-  "date-released": "2026-10-01",
+  "version": "0.7.0.dev20261003",
   "authors": [
     {"family-names": "Cheng", "given-names": "Chang"}
   ],

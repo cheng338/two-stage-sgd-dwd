@@ -56,7 +56,17 @@ certify a custom function on unobserved inputs; symmetric PSD behavior over
 its intended domain remains the caller's contract.
 
 No Gram matrix is retained after preparation. Training and prediction then
-evaluate bounded blocks on demand. The SGD bound uses the maximum diagonal
+evaluate bounded blocks on demand. Optional `kernel_cache_bytes` stores only
+training columns requested by single-observation updates, within a fixed
+payload limit, and releases them when fitting exits. It is disabled by default
+and restricted to the analytic built-in families, so enabling it does not
+introduce an up-front training Gram computation. It is independent of the
+MNIST runner's within-fold first-stage reuse. The optional native optimizer
+likewise requires analytic built-ins for kernel fits. For other kernels,
+`optimizer_backend="auto"` falls back to Python and `"native"` raises an error.
+See [backend controls](optimizer-backends.md).
+
+The SGD bound uses the maximum diagonal
 on the actual kernel fitting subset, so changing kernels also changes the
 safe step-size constant. Preparation time/work is reported separately from
 optimizer and checkpoint work. A precomputed kernel is unsupported because
@@ -103,8 +113,10 @@ The helper rejects externally forwarded `validation_data`, including pipeline
 fit arguments. Checkpoint selection within CV requires another monitoring
 split drawn only from each training fold. A CV scoring fold must not also
 choose the fitted checkpoint. The final selected model is refitted on the
-provided training data; an untrained fallback or invalid candidate raises an
-error rather than becoming an eligible winner.
+provided training data; an untrained fallback, wall-time-truncated fit, or
+invalid candidate raises an error rather than becoming an eligible winner.
+A finite trained fit that completes its epoch budget remains eligible without
+an SGD optimality certificate.
 
 Evaluate final predictive performance on an untouched test set. If there is
 no separate test set, use nested CV to assess the entire tuning procedure.
@@ -207,36 +219,53 @@ Earlier exploratory runs used an explicit 5% provisional control; their saved
 records retain that setting. The 30% default aligns the software conventions
 with the ensemble package and is not selected from those exploratory scores.
 
-After the initial grid, the runner allows at most three expansion rounds.
-Any eligible candidate within 1e-12 of the best score at an explored lambd or
-gamma endpoint can trigger expansion. Each reached side moves outward by its
-neighboring logarithmic gap, capped at one decade; the complete new Cartesian shell,
-including cross-corners, uses every fixed retention fraction. All numerically
-valid coordinates that were attempted define the explored bounds, including
-coordinates from recorded ineligible selections. Completed candidate records
-are not evaluated again. An unexpected fitting error stops the run and is
-retried only on an explicit resume.
+The adaptive policy matches the ensemble workflow's default three expansion
+rounds and 500 distinct grid candidates, excluding the control. Its search
+criterion requires valid conditional lower and upper neighbors of the chosen
+winner within a factor of two on each coefficient and two stable completed
+local rounds. Geometric refinement repeats until that criterion is met or a
+budget prevents further work. The optional `--refinement-rounds` is a safety
+cap; reaching it never substitutes for qualification. Retention is compared
+only at the fixed choices in the supplied grid; the search does not certify a
+continuous retention optimum.
 
-The runner stops further expansion after two complete rounds that do not
-improve the best mean score by more than 1e-12. It then permits up to two
-refinement rounds around the top three distinct eligible lambd/gamma pairs,
-using geometric midpoints to explored neighbors and all five retention values.
-Refinement stays within explored endpoints. The default budget is 2,000
-distinct grid candidates, excluding the separate default control. A proposed
-round must fit in the remaining budget in full; budget-limited rounds and
-unresolved boundaries are reported rather than selectively truncated.
+Conditional support holds every other parameter fixed, including retention.
+Coordinates evaluated under another gamma, lambda, or retention choice do not
+establish that support. Missing combinations are filled, invalid neighbors are
+probed inward, and unresolved outer boundaries are extended. Tied-best tuples
+also require support. An outer tied edge can use documented same-slice plateau
+evidence from two valid completed outward levels, but the canonical winner
+still requires a bilateral bracket. Failed or missing fits never supply a
+plateau certificate. None of these checks establishes a global optimum.
 
-`--resume` reuses completed candidate records and pending stages only when
-configuration, package/example source hashes, input hashes, observation IDs,
-and folds match. An uncommitted candidate restarts from the beginning; this is
-not an optimizer-state resume. Dependency versions are not checked by this
-runner, so retain the original numerical environment for reproducibility.
-The output preserves configuration, folds, per-candidate records, stage
-history, the separate control, and selection/boundary diagnostics. These are
-exploratory tuning outputs, not independent test-error estimates. A boundary
-plateau at 200 epochs may reflect the optimization budget; confirmation with
-larger budgets and independent seeds is required before recommending new
-defaults. Computational cost pilots alone do not supply that evidence.
+Every proposed stage must fit the remaining candidate budget in full.
+Unresolved searches finish as `needs_review`, retaining provisional winners
+and concrete reasons. They cannot export qualified final-evaluation settings.
+Accepted searches finish as `accepted`, with `qualified-selection.json`
+binding parameters, fitting controls, source identity, data, folds, and scores.
+`load_qualified_selection` checks those records before returning the settings.
+The runner never performs final fitting or opens the official test partition;
+a later evaluation must reserve its own independent data and use the locked
+settings. Search acceptance does not establish SGD optimality.
+
+`--resume` reuses committed candidates and pending stages only with identical
+configuration, recorded Python/NumPy/SciPy/scikit-learn versions, source hashes,
+input hashes, observation IDs, and folds. An uncommitted candidate restarts
+from the beginning; this is not an optimizer-state resume.
+Checkpoint formats from version 0.5.0 cannot be mixed with this policy.
+Runtime/numerical failures stop the run and may be retried by explicit resume;
+one-class retained subsets remain recorded ineligible candidates. Completed
+fixed-epoch fits are eligible even though SGD optimality remains unchecked.
+
+A boundary plateau at 200 epochs may reflect the optimization budget;
+confirmation with larger budgets and independent seeds is required before
+recommending new defaults. Computational cost pilots alone do not supply that
+evidence.
+
+Ordinary `make_search` remains fail-fast fixed-grid sklearn CV. It refits its
+winner automatically and has no adaptive boundary qualification. It rejects
+shared `validation_data`, wall-time-truncated fits, and untrained fallbacks.
+Do not confuse that helper with this separately invoked adaptive workflow.
 
 The [MNIST development report](mnist-exploration.md) records the completed
 7-versus-8 search, lambda endpoint extensions, bandwidth refinement, retention

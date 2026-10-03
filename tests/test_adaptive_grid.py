@@ -223,5 +223,291 @@ class AdaptiveValidationTests(unittest.TestCase):
                 propose_refinement(records, [0.05], top_k=count)
 
 
+def policy_grid(values=(1.0, 4.0, 16.0), gammas=None, retentions=(0.3,)):
+    return {"kernel": ["rbf"], "lambd": list(values),
+            "gamma": list(values if gammas is None else gammas),
+            "retention_fraction": list(retentions)}
+
+
+def policy_record(params, score, *, folds=None):
+    result = {"params": params, "mean_score": score,
+              "eligible": score is not None and math.isfinite(score)}
+    if folds is not None:
+        result["folds"] = [{"fold": i, "accuracy": score, "eligible": result["eligible"]}
+                           for i in range(folds)]
+    return result
+
+
+def policy_pair(params):
+    return tuple(float(format(params[name], '.12g')) for name in ('lambd', 'gamma'))
+
+
+def drive_policy(surface, initial=None, config=None, max_stages=80):
+    initial = policy_grid() if initial is None else initial
+    config = _MODULE.AdaptiveSearchConfig(top_k=1) if config is None else config
+    rows, state, stages = [], None, []
+    for _ in range(max_stages):
+        answer = _MODULE.next_search_stage(rows, initial, config, state)
+        state = answer['state']
+        if answer['review'] is not None:
+            return answer, rows, stages
+        stages.append((answer['phase'], copy.deepcopy(answer['candidates'])))
+        rows.extend(policy_record(params, surface(params), folds=config.expected_folds)
+                    for params in answer['candidates'])
+    raise AssertionError('Policy did not finish within the synthetic stage count')
+
+
+class ConditionalPolicyTests(unittest.TestCase):
+    def test_second_midpoint_peak_requires_repeated_local_refinement(self):
+        def surface(params):
+            lambd, gamma = policy_pair(params)
+            if gamma != 1.0:
+                return 0.1
+            if math.isclose(math.log10(lambd), 1.5, abs_tol=1e-11):
+                return 1.0
+            return 0.75 if lambd == 1000.0 else 0.5 if lambd == 1.0 else 0.25
+        answer, rows, _ = drive_policy(surface, policy_grid((1e-6, 1.0, 1e6)))
+        self.assertEqual(answer['review']['state'], 'accepted')
+        self.assertEqual(answer['state']['best_mean_score'], 1.0)
+        self.assertTrue(answer['state']['winner_bracket_resolved'])
+        self.assertGreater(answer['state']['refinement_rounds'], 2)
+        self.assertGreaterEqual(answer['state']['stable_rounds'], 2)
+        self.assertLess(len(rows), 500)
+
+    def test_missing_conditional_cross_is_repaired_before_expansion(self):
+        initial = policy_grid()
+        config = _MODULE.AdaptiveSearchConfig(top_k=1)
+        surface = lambda p: .75 if policy_pair(p) == (8., 8.) else .5 if policy_pair(p) == (4., 4.) else .25
+        rows = [policy_record(p, surface(p)) for p in _MODULE._parameter_grid(initial)]
+        first = _MODULE.next_search_stage(rows, initial, config)
+        self.assertEqual(first['phase'], 'local')
+        rows.extend(policy_record(p, surface(p)) for p in first['candidates'])
+        repair = _MODULE.next_search_stage(rows, initial, config, first['state'])
+        self.assertEqual(repair['state']['pending']['kind'], 'conditional_repair')
+        self.assertIn((16., 8.), [policy_pair(p) for p in repair['candidates']])
+        self.assertIn((8., 16.), [policy_pair(p) for p in repair['candidates']])
+        self.assertFalse(repair['state']['winner_bracket_resolved'])
+        self.assertEqual(repair['state']['expansion_rounds'], 0)
+
+    def test_other_retention_does_not_supply_conditional_neighbor(self):
+        initial = policy_grid(retentions=(.1, .3))
+        missing = (16., 4., .1)
+        rows = [policy_record(p, .75 if policy_pair(p) == (4., 4.) and p['retention_fraction'] == .1 else .25)
+                for p in _MODULE._parameter_grid(initial)
+                if (*policy_pair(p), p['retention_fraction']) != missing]
+        answer = _MODULE.next_search_stage(rows, initial, _MODULE.AdaptiveSearchConfig())
+        self.assertEqual(answer['state']['pending']['kind'], 'conditional_repair')
+        self.assertIn(missing, triples(answer['candidates']))
+        self.assertTrue(any(item['issue'] == 'missing_conditional_neighbor'
+                            for item in answer['state']['boundary_issues']))
+
+    def test_tied_best_retention_specific_boundary_is_checked(self):
+        initial = policy_grid(retentions=(.1, .3))
+        rows = [policy_record(p, .75 if ((policy_pair(p) == (4., 4.) and p['retention_fraction'] == .1)
+                    or (policy_pair(p) == (16., 4.) and p['retention_fraction'] == .3)) else .25)
+                for p in _MODULE._parameter_grid(initial)]
+        answer = _MODULE.next_search_stage(rows, initial, _MODULE.AdaptiveSearchConfig())
+        self.assertEqual(answer['phase'], 'expansion-1')
+        self.assertIn((64., 4., .3), triples(answer['candidates']))
+
+    def test_invalid_outer_attempts_cannot_certify_interior_or_plateau(self):
+        answer, rows, _ = drive_policy(lambda p: .5 if all(1 <= value <= 4 for value in policy_pair(p)) else None,
+            policy_grid((1., 4.)), _MODULE.AdaptiveSearchConfig(refine=False, max_candidates=40))
+        self.assertEqual(answer['review']['state'], 'needs_review')
+        self.assertFalse(answer['state']['boundary_plateau_evidence'])
+        self.assertEqual(answer['state']['stable_rounds'], 0)
+        self.assertLessEqual(len(rows), 40)
+
+    def test_remote_tied_edge_plateau_requires_completed_valid_same_slice_evidence(self):
+        initial = policy_grid(retentions=(.1, .3))
+        config = _MODULE.AdaptiveSearchConfig(refine=False)
+        def surface(p):
+            lambd, gamma = policy_pair(p)
+            return .75 if gamma == 4 and ((lambd == 4 and p['retention_fraction'] == .1)
+                or (lambd <= 4 and p['retention_fraction'] == .3)) else .25
+        answer, rows, _ = drive_policy(surface, initial, config)
+        self.assertEqual(answer['review']['state'], 'accepted')
+        self.assertEqual(answer['state']['expansion_rounds'], 2)
+        certificates = answer['state']['boundary_plateau_evidence']
+        self.assertTrue(certificates)
+        self.assertTrue(all(item['completed_outward_rounds'] == 2 for item in certificates))
+        self.assertFalse(answer['review']['plateau_is_optimality_certificate'])
+        damaged = copy.deepcopy(rows)
+        target = certificates[0]['evidence_keys'][0]
+        entry = next(row for row in damaged if _MODULE.parameter_hash(row['params']) == target)
+        entry.update(eligible=False, mean_score=None)
+        reopened = _MODULE.next_search_stage(damaged, initial, config, answer['state'])
+        self.assertNotEqual((reopened['review'] or {}).get('state'), 'accepted')
+        self.assertFalse(reopened['state']['boundary_plateau_evidence'])
+
+    def test_stagnant_canonical_winner_at_boundary_is_never_waived(self):
+        answer, _, _ = drive_policy(lambda p: .5, policy_grid((1., 4.)),
+            _MODULE.AdaptiveSearchConfig(refine=False))
+        self.assertEqual(answer['review']['state'], 'needs_review')
+        self.assertIn('expansion_budget', answer['review']['stopping_reason'])
+        self.assertTrue(answer['state']['boundary_issues'])
+
+    def test_invalid_adjacent_attempt_is_repaired_between_winner_and_failure(self):
+        initial = policy_grid((2., 4., 8.))
+        rows = [policy_record(p, None if policy_pair(p) == (8., 4.) else .75 if policy_pair(p) == (4., 4.) else .25)
+                for p in _MODULE._parameter_grid(initial)]
+        answer = _MODULE.next_search_stage(rows, initial, _MODULE.AdaptiveSearchConfig())
+        self.assertEqual(answer['state']['pending']['kind'], 'conditional_repair')
+        self.assertTrue(any(4 < p['lambd'] < 8 and p['gamma'] == 4 for p in answer['candidates']))
+        self.assertNotIn((8., 4., .3), triples(answer['candidates']))
+        self.assertFalse(answer['state']['winner_bracket_resolved'])
+
+    def test_two_actual_local_rounds_are_required_even_for_narrow_initial_bracket(self):
+        answer, _, stages = drive_policy(lambda p: .75 if policy_pair(p) == (4., 4.) else .25,
+                                         policy_grid((2., 4., 8.)))
+        self.assertEqual(answer['review']['state'], 'accepted')
+        self.assertEqual(answer['state']['stable_rounds'], 2)
+        self.assertEqual([label for label, _ in stages], ['coarse', 'local', 'local-2'])
+        self.assertEqual(answer['review']['retention_scope'], 'fixed_grid_choices_not_continuous_certification')
+
+    def test_partial_stage_replays_only_missing_work_and_no_stability_credit(self):
+        initial = policy_grid((2., 4., 8.))
+        config = _MODULE.AdaptiveSearchConfig(top_k=1)
+        rows = [policy_record(p, .75 if policy_pair(p) == (4., 4.) else .25)
+                for p in _MODULE._parameter_grid(initial)]
+        first = _MODULE.next_search_stage(rows, initial, config)
+        rows.append(policy_record(first['candidates'][0], .25))
+        import json
+        restored = json.loads(json.dumps(first['state'], allow_nan=False))
+        answer = _MODULE.next_search_stage(rows, initial, config, restored)
+        self.assertEqual(answer['phase'], first['phase'])
+        self.assertEqual(answer['state']['stable_rounds'], 0)
+        self.assertEqual(answer['candidates'], first['candidates'][1:])
+        self.assertEqual(first['state']['pending']['candidates'], restored['pending']['candidates'])
+
+    def test_changed_baseline_fold_scores_reset_stability_even_with_same_mean(self):
+        initial = policy_grid((2., 4., 8.))
+        config = _MODULE.AdaptiveSearchConfig(top_k=1, expected_folds=2)
+        rows = [policy_record(p, .75 if policy_pair(p) == (4., 4.) else .25, folds=2)
+                for p in _MODULE._parameter_grid(initial)]
+        first = _MODULE.next_search_stage(rows, initial, config)
+        rows.extend(policy_record(p, .25, folds=2) for p in first['candidates'])
+        rows[0]['folds'][0]['accuracy'], rows[0]['folds'][1]['accuracy'] = .2, .3
+        answer = _MODULE.next_search_stage(rows, initial, config, first['state'])
+        self.assertEqual(answer['state']['stable_rounds'], 0)
+
+    def test_invalid_local_stage_does_not_earn_stability(self):
+        initial = policy_grid((2., 4., 8.))
+        config = _MODULE.AdaptiveSearchConfig(top_k=1)
+        rows = [policy_record(p, .75 if policy_pair(p) == (4., 4.) else .25)
+                for p in _MODULE._parameter_grid(initial)]
+        first = _MODULE.next_search_stage(rows, initial, config)
+        rows.extend(policy_record(p, None) for p in first['candidates'])
+        answer = _MODULE.next_search_stage(rows, initial, config, first['state'])
+        self.assertEqual(answer['state']['stable_rounds'], 0)
+        self.assertFalse(answer['state']['winner_bracket_resolved'])
+
+    def test_each_local_pair_keeps_all_fixed_retention_choices(self):
+        initial = policy_grid(retentions=(.1, .3))
+        rows = [policy_record(p, .75 if policy_pair(p) == (4., 4.) else .25)
+                for p in _MODULE._parameter_grid(initial)]
+        answer = _MODULE.next_search_stage(rows, initial, _MODULE.AdaptiveSearchConfig(top_k=1))
+        grouped = {}
+        for p in answer['candidates']:
+            grouped.setdefault(policy_pair(p), set()).add(p['retention_fraction'])
+        self.assertTrue(grouped)
+        self.assertTrue(all(values == {.1, .3} for values in grouped.values()))
+
+    def test_candidate_budget_holds_entire_stage(self):
+        for limit in (8, 9):
+            answer, rows, _ = drive_policy(lambda p: .75 if policy_pair(p) == (4., 4.) else .25,
+                config=_MODULE.AdaptiveSearchConfig(top_k=1, max_candidates=limit))
+            self.assertEqual(answer['review']['state'], 'needs_review')
+            self.assertIn('candidate_budget', answer['review']['stopping_reason'])
+            self.assertFalse(answer['candidates'])
+            self.assertEqual(len(rows), 0 if limit == 8 else 9)
+
+    def test_refinement_safety_cap_holds_instead_of_certifying_success(self):
+        answer, _, stages = drive_policy(lambda p: .75 if policy_pair(p) == (4., 4.) else .25,
+            policy_grid((2., 4., 8.)), _MODULE.AdaptiveSearchConfig(top_k=1, max_refinements=1))
+        self.assertEqual(answer['review']['state'], 'needs_review')
+        self.assertIn('refinement_budget', answer['review']['stopping_reason'])
+        self.assertEqual([label for label, _ in stages], ['coarse', 'local'])
+
+    def test_no_refine_still_requires_valid_bilateral_conditional_support(self):
+        answer, _, stages = drive_policy(lambda p: .75 if policy_pair(p) == (4., 4.) else .25,
+            config=_MODULE.AdaptiveSearchConfig(refine=False))
+        self.assertEqual(answer['review']['state'], 'accepted')
+        self.assertEqual(len(stages), 1)
+        self.assertFalse(answer['state']['winner_bracket_resolved'])
+
+    def test_configuration_and_schema_are_bound_across_resume(self):
+        initial = policy_grid()
+        first = _MODULE.next_search_stage([], initial, _MODULE.AdaptiveSearchConfig())
+        with self.assertRaisesRegex(ValueError, 'different settings'):
+            _MODULE.next_search_stage([], initial, _MODULE.AdaptiveSearchConfig(top_k=1), first['state'])
+        state = copy.deepcopy(first['state'])
+        state['schema_version'] = 999
+        with self.assertRaisesRegex(ValueError, 'schema'):
+            _MODULE.next_search_stage([], initial, _MODULE.AdaptiveSearchConfig(), state)
+
+    def test_invalid_controls_are_rejected(self):
+        for kwargs in ({'bracket_factor': 1}, {'stable_refinement_rounds': 0},
+                       {'max_refinements': -1}, {'max_refinements': True},
+                       {'expected_folds': 0}, {'allow_boundary_plateau': 'yes'}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                _MODULE.AdaptiveSearchConfig(**kwargs)
+
+    def test_duplicate_candidate_receipts_are_rejected(self):
+        entry = record(4., 4., .3)
+        with self.assertRaisesRegex(ValueError, 'Repeated candidate'):
+            _MODULE.next_search_stage([entry, copy.deepcopy(entry)], policy_grid(), _MODULE.AdaptiveSearchConfig())
+
+    def test_close_float_exhaustion_holds_without_reproposing_an_attempted_key(self):
+        values = (1., 1.00000000000001, 1.00000000000002)
+        initial = policy_grid(values)
+        rows = [policy_record(p, .75 if p['lambd'] == values[1] and p['gamma'] == values[1] else .25)
+                for p in _MODULE._parameter_grid(initial)]
+        answer = _MODULE.next_search_stage(rows, initial, _MODULE.AdaptiveSearchConfig(top_k=1))
+        self.assertEqual(answer['review']['state'], 'needs_review')
+        self.assertIn('parameter_limit', answer['review']['stopping_reason'])
+        self.assertEqual(answer['candidates'], [])
+
+
+class CandidateEligibilityTests(unittest.TestCase):
+    def test_actual_fold_evidence_must_be_complete_finite_eligible_and_consistent(self):
+        base = policy_record(record(4., 4., .3)['params'], .75, folds=5)
+        self.assertTrue(_MODULE.valid_record(base, expected_folds=5))
+        for defect in ('missing', 'partial', 'empty', 'nonfinite', 'ineligible', 'duplicate',
+                       'wrongmean', 'missingflag', 'missingindex'):
+            changed = copy.deepcopy(base)
+            if defect == 'missing':
+                changed.pop('folds')
+            elif defect == 'partial':
+                changed['folds'].pop()
+            elif defect == 'empty':
+                changed['folds'] = []
+            elif defect == 'nonfinite':
+                changed['folds'][0]['accuracy'] = math.nan
+            elif defect == 'ineligible':
+                changed['folds'][0]['eligible'] = False
+            elif defect == 'duplicate':
+                changed['folds'][0]['fold'] = 1
+            elif defect == 'missingflag':
+                changed['folds'][0].pop('eligible')
+            elif defect == 'missingindex':
+                changed['folds'][0].pop('fold')
+            else:
+                changed['mean_score'] = .9
+            with self.subTest(defect=defect):
+                self.assertFalse(_MODULE.valid_record(changed, expected_folds=5))
+                self.assertEqual(_MODULE.ordered_eligible([changed], expected_folds=5), [])
+
+    def test_documented_sgd_tie_break_is_independent_of_input_order(self):
+        records = [record(1., 4., .1, .8), record(4., 4., .1, .8),
+                   record(4., 1., .1, .8), record(100., 1., .3, .8)]
+        ordered = _MODULE.ordered_eligible(records)
+        self.assertEqual(ordered, _MODULE.ordered_eligible(reversed(records)))
+        self.assertEqual(policy_pair(ordered[0]['params']), (4., 1.))
+        answer = _MODULE.next_search_stage(records, policy_grid(retentions=(.1, .3)),
+                                          _MODULE.AdaptiveSearchConfig())
+        self.assertEqual(answer['state']['best_parameters'], ordered[0]['params'])
+
+
 if __name__ == "__main__":
     unittest.main()

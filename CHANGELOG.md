@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased - 0.7.0.dev20261003
+
+- Add optional fit-local lazy training kernel-column reuse with a byte-bounded
+  LRU cache. Keep caching disabled by default, preserve single-observation
+  update arithmetic, and report cache usage and actual kernel evaluations.
+- Add an optional compiled scalar optimizer with `optimizer_backend` choices
+  `python` (default), `auto`, and `native`. Report automatic fallback reasons;
+  reject unsupported forced-native fits and preserve numerical failures.
+  Support fixed-epoch, single-observation fits without validation, callbacks,
+  or wall-time limits. Keep portable Python-only builds available.
+
+## Unreleased development baseline - 0.6.0.dev20261003
+
+- Add explicit fixed-epoch and validation-patience stopping controls, with
+  separate cap, model usability, CV eligibility, and optimality diagnostics.
+  Preserve SGD updates and the default 200 epochs per stage.
+- Align adaptive tuning with the ensemble workflow: three expansion rounds,
+  500 candidates, valid conditional factor-two brackets, and two stable
+  completed local rounds. Refinement repeats until qualified or budget-limited.
+- Hold unresolved searches as `needs_review`, including invalid or missing
+  conditional neighbors. Export locked final-evaluation settings only after
+  acceptance; retain training-only data access and exact-identity resume.
+
 ## 0.5.0 - MNIST tuning ranges and adaptive exploration, 2026-10-01
 
 - Adopt the ensemble DWD package's MNIST lambda and gamma ranges and its

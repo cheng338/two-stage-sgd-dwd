@@ -4,4 +4,13 @@ __pycache__/
 dist/
 *.egg-info/
 .venv/
+build/
+*.pyd
+*.so
+*.lib
+*.exp
+*.pdb
+*.obj
+zig-local-cache/
+zig-global-cache/
 

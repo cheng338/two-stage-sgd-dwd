@@ -70,6 +70,14 @@ def test_cached_evaluation_matches_public_pipeline_bitwise_for_retention_and_wid
             assert fold_record["accuracy"] == np.mean(direct.predict(X[validation]) == y[validation])
             assert fold_record["linear_updates"] == direct.linear_estimator_.n_updates_
             assert fold_record["kernel_updates"] == expected.n_updates_
+            for stage in ("linear_fit", "kernel_fit"):
+                diagnostics = fold_record[stage]
+                assert diagnostics["cap_reached"] and diagnostics["criterion_reached"]
+                assert diagnostics["fit_usable"] and diagnostics["cv_eligible"]
+                assert diagnostics["termination_criterion"] == "fixed_epochs"
+                assert diagnostics["n_epochs_completed"] == 4
+                assert not diagnostics["optimality_checked"]
+                assert not diagnostics["optimality_met"] and not diagnostics["converged"]
         assert record["mean_score"] == np.mean([fold["accuracy"] for fold in record["folds"]])
         json.dumps(record, allow_nan=False)
     assert evaluator.linear_fit_count_ == len(folds)

@@ -120,14 +120,32 @@ derivative Lipschitz constant; the +1 accounts for the free intercept.
 This finite training bound does not establish a global population bound.
 Both bounds are computed from the actual stage inputs. Float64 is used.
 
+`stopping="auto"` preserves the previous rule: fixed epochs without validation
+data, validation patience with it. Explicit `stopping="validation"` requires
+validation data. Explicit `stopping="fixed"` disables patience but retains
+best-checkpoint selection if validation data is supplied.
+
 With validation data, checks default to every five epochs. The first finite
 post-update check initializes the best checkpoint and patience reference.
 The best checkpoint follows the smallest actual validation loss, with the
 earliest exact tie. The separate patience reference updates only for improvement
 greater than tol * max(1, reference_loss). Three consecutive misses and at
-least ten completed epochs stop fitting; with defaults the earliest stop is
-epoch 20. The initial zero state is diagnostic, not a validation candidate.
+least ten completed epochs stop fitting when validation patience is active;
+with defaults the earliest stop is epoch 20. The initial zero state is
+diagnostic, not a validation candidate.
 Without validation data, the final finite state is selected at the epoch cap.
+
+The named `termination_criterion_` is `fixed_epochs` or `validation_patience`.
+`criterion_reached_` records its completion, not optimality. `n_iter_` is the
+number of committed optimizer updates, `returned_iteration_` is the selected
+checkpoint update, and `n_epochs_completed_` is processed observations divided
+by fitting-set size (possibly fractional after truncation). `cap_reached_`
+separates epoch/time limits from `fit_usable_`. `cv_eligible_` permits trained
+fixed-epoch fits, but excludes wall-time truncation and untrained fallbacks.
+No objective or optimality test is run: `optimality_checked_`,
+`optimality_met_`, and `converged_` remain false. The last two mean no
+certificate was established, not that divergence was proved. Two-stage
+`stage_diagnostics_` preserves these facts separately for both fits.
 
 No rule claims that finite SGD equals an exact minimizer or that validation
 loss improves monotonically. The default maximum is 200 epochs. Optional time
@@ -185,6 +203,9 @@ times need not sum to total fitting time. `kernel_evaluation_count_` counts
 individual kernel values in completed kernel calls during fitting, including
 completed validation blocks before a cap. Prediction and separately requested
 norm/objective diagnostics are excluded from this fitting counter.
+With optional lazy training-column reuse, cache hits perform no kernel
+evaluation and do not increase this counter. Cache payload capacity, peak
+retained bytes, hits, misses, and evictions have separate diagnostics.
 
 Kernel preparation is recorded separately in `kernel_preparation_seconds_`,
 `kernel_preparation_evaluation_count_`, and `kernel_validation_`; the combined
@@ -194,6 +215,21 @@ An interrupted non-RBF preparation raises `TrainingError` with status
 `kernel_preparation_timeout` because validation has not completed.
 RBF's diagonal is known to be one and can safely return the usual zero-update
 diagnostic if its cap expires before any optimizer step.
+
+The default execution settings are `optimizer_backend="python"` and
+`kernel_cache_bytes=0` on kernel and two-stage estimators. The linear estimator
+accepts the backend setting but has no kernel-cache parameter. Optional native
+scalar execution preserves the update definitions and scalar sampling stream;
+it is restricted to fixed-epoch, single-observation fits without validation,
+callbacks, or time caps, using contiguous aligned feature arrays and analytic
+built-in kernels. `"auto"` records a Python fallback for unsupported settings;
+`"native"` rejects them. Each two-stage component records its actual backend.
+
+Lazy column storage is fit-local, bounded by retained array payload, and
+populated only when an update requests a column. It does not reuse a fitted
+model across repetitions. Failed numerical fits remain failed under either
+backend; no older iterate is silently used as a successful fallback. See
+[execution controls and timing scope](optimizer-backends.md).
 
 ## Relationship to the previous packages
 

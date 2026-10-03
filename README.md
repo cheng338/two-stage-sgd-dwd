@@ -41,6 +41,13 @@ Dependencies are NumPy, SciPy, and scikit-learn. Validation environments are
 documented in [VALIDATION.md](VALIDATION.md). The package does not require
 Conda or a particular BLAS vendor.
 
+The compiled scalar optimizer is optional. A compatible native wheel includes
+it; a source build needs a suitable C compiler to build it. Setting the build
+environment variable `SGD_BUILD_ACCEL=0` requests a portable Python-only build.
+The Python backend remains the default in either distribution. Native binary
+availability depends on the operating system and architecture; see
+[backend and cache details](docs/optimizer-backends.md).
+
 # Example
 
 ```python
@@ -74,8 +81,8 @@ Two-stage fitting resolves scale on the complete training fold before selecting
 rows. The default is `gamma="scale"`, as in `ensemble-dwd`; it is a
 data-dependent starting value, not a statistically optimal bandwidth guarantee.
 
-`lambd` is the sole regularization parameter in version 0.5.0 and means
-`mean_loss + lambd * ||h||^2`, as in `dwd`. Python reserves the word `lambda`,
+`lambd` is the sole regularization parameter in version 0.7.0.dev20261003 and
+means `mean_loss + lambd * ||h||^2`, as in `dwd`. Python reserves the word `lambda`,
 so the argument is spelled `lambd`. Its default is **1e-6**, matching the
 ensemble package's starting value. The fitted value is `lambd_`.
 The retention default is **0.3 (30%)**, also matching `ensemble-dwd`.
@@ -177,26 +184,44 @@ equivalence to ordinary complete fits is checked, and fitted state never
 crosses fold boundaries.
 
 The runner evaluates `lambd=1e-6, gamma="scale", retention_fraction=0.3` as a
-separate control, then searches the numeric grid. It allows up to three
-boundary expansions and two geometric-refinement rounds around the best
-three distinct lambd/gamma pairs, with at most 2,000 grid candidates. Two
-complete expansion rounds without improvement stop further expansion.
-Every proposed round covers all five fixed retention fractions. Completed
-candidate records, including ineligible selections, are not evaluated again.
-An unexpected fitting error stops the run; an explicit resume retries the
-uncommitted candidate from the beginning. Earlier
-exploratory runs used an explicit 5% provisional control; their records retain
-that setting. The 30% software default aligns with the ensemble package;
+separate control, then searches the numeric grid. Its defaults match the
+ensemble adaptive workflow: at most **three expansion rounds** and **500
+candidates**, excluding the control. Lambda and gamma are refined around the
+best three distinct pairs until the selected winner has valid conditional
+neighbors within a factor of two on both sides and **two completed local
+rounds are stable**. Retention is compared at the fixed supplied grid values.
+
+Neighbors must be evaluated at the same values of every other parameter.
+Invalid fits cannot establish a bracket, and missing conditional combinations
+are filled before further expansion. Tied boundary winners are checked too;
+a remote tied edge can be waived only by recorded, repeated valid same-slice
+outward evidence. The selected winner always needs its own bilateral bracket.
+
+A complete proposed stage must fit the remaining budget. Unresolved bounds,
+invalid support, or exhausted budgets produce `state="needs_review"`, with
+provisional settings and reasons. Successful searches produce `state="accepted"`
+and `qualified-selection.json`. The example's `load_qualified_selection`
+checks the saved evidence before exporting those locked settings. Neither
+state automatically starts a final fit or accesses held-out data.
+
+Earlier exploratory runs used an explicit 5% provisional control; their
+records retain that setting. The 30% software default aligns with the ensemble package;
 this alignment does not establish 30% as the best-performing retention.
 
-The runner saves folds, settings, candidate records, and selection diagnostics
-for inspection and supports resuming with `--resume`. It reports boundary
-winners, budget limits, and plateaus. A CV winner or plateau at a fixed
-epoch budget does not establish an optimal default or optimizer convergence;
-larger-budget and independent-seed checks remain part of assessing a candidate.
-The [recorded MNIST exploration](docs/mnist-exploration.md) for digits 7 and 8
-includes numerical verification, these training-only checks, a larger training
-sample, and a focused follow-up grid.
+`--refinement-rounds` is an optional safety cap, not a success condition; its
+default is unlimited within the candidate budget. Saved folds, settings,
+implementation snapshots, candidate records, and policy state support
+`--resume` only with matching settings, recorded runtime versions, and data.
+This version does not resume
+older example checkpoints. Ordinary `make_search` remains fixed-grid CV and
+does not apply this adaptive review gate.
+
+Search acceptance is a finite empirical stopping decision. It does not
+establish solver convergence, a global optimum, or final test accuracy.
+Larger-budget and independent-seed checks remain useful when assessing SGD
+settings. The [earlier MNIST exploration](docs/mnist-exploration.md) remains
+historical evidence for version 0.5.0; it is not a validation of this branch.
+
 Exploratory CV scores and checks across SGD seeds do not establish a screening
 advantage or replace replicated evaluation on independent data. The starting
 defaults are inherited choices, not universally optimal settings.
@@ -252,6 +277,74 @@ update, and theory distinctions when describing optional batches or shuffling.
 No sampling-policy revision is needed to describe the unchanged default.
 The package remains **binary only**; multiclass DWD is not implemented here.
 
+# Optimizer backends and lazy kernel columns
+
+All three estimators accept `optimizer_backend="python"` by default.
+`"auto"` selects the optional compiled scalar optimizer when supported and
+otherwise uses Python. `"native"` requires the compiled optimizer: unsupported
+fitting controls raise `ValueError`, and an unavailable extension raises
+`ImportError`.
+
+The native path requires `batch_size=1`, C-contiguous aligned feature arrays,
+and no `validation_data`, `checkpoint_callback`, or time limit. This includes
+`max_seconds` and, for the two-stage linear fit, `linear_max_seconds`. Supplying
+validation data is unsupported even when `stopping="fixed"`. Both independent
+sampling with replacement and shuffled epochs are supported. Native kernel
+fits require the analytic built-in kernels listed below. Other configurations
+continue to work with `"python"` or an automatic Python fallback.
+
+`optimizer_backend_` records the actual backend and
+`optimizer_backend_reason_` records why it was selected. The two-stage model
+applies the requested setting to both stages, exposes their individual
+diagnostics, and reports `"mixed"` when their actual backends differ. A native
+numerical failure invalidates the fit; it is not retried using Python.
+
+For repeated single-observation kernel updates, `KernelSGDDWD` and
+`TwoStageDWDClassifier` optionally reuse training kernel columns:
+
+```python
+model = TwoStageDWDClassifier(
+    batch_size=1, kernel="rbf", kernel_cache_bytes=64 * 1024**2,
+    optimizer_backend="auto", random_state=17,
+)
+```
+
+The default `kernel_cache_bytes=0` disables caching. A positive integer is a
+byte limit on retained float64 column array payload. Each column is computed
+only when its training observation is drawn, using the original column
+calculation. Later draws reuse it while retained; the least recently used
+column is evicted when storage is full. Nothing precomputes a full Gram matrix,
+and all cached arrays are released when fitting exits, including failed fits.
+A limit smaller than one column stores no columns. Python metadata, allocator
+overhead, kernel working memory, and the rest of the model are outside this
+payload limit.
+
+Enabled caching requires `batch_size=1` and one of `linear`, `rbf`, `poly`,
+`polynomial`, `laplacian`, `cosine`, or `chi2`. Other batch modes and kernels
+remain available with the default zero cache. Validation and prediction use
+their existing bounded blocks and are not cached. The two-stage cache applies
+only to its retained kernel training set; the linear stage is unchanged.
+
+Cache diagnostics are `kernel_cache_hits_`, `kernel_cache_misses_`,
+`kernel_cache_evictions_`, `kernel_cache_peak_bytes_`, and
+`kernel_cache_capacity_columns_`; they are also available on the two-stage
+estimator and in its kernel-stage diagnostics. Disabled-cache counters are zero.
+`kernel_evaluation_count_` counts values actually computed during optimization
+and validation, so a cache hit does not increase it. Kernel preparation counts
+remain separate. At fixed data, settings, seed, and update budget, cache reuse
+preserves the update sequence and values. A wall-time limit can stop faster and
+slower implementations at different updates; it is not an equality guarantee.
+
+These controls do not change the SGD objective, sampling policy, or number of
+updates. Correctness checks compare complete fitted results and RNG state in
+the same numerical environment. They do not promise the same runtime or
+bitwise agreement across different BLAS libraries, thread settings, hardware,
+or compilers. Assess speed with complete cold fits, including preprocessing,
+screening, kernel preparation, lazy cache filling, and prediction as applicable.
+Scalar-update microbenchmarks alone do not establish an end-to-end advantage.
+See [backend and cache details](docs/optimizer-backends.md) for limits and
+verification scope.
+
 # Data and labels
 
 Supply finite dense numeric features and exactly two class labels. Labels may
@@ -274,13 +367,42 @@ A `SelectionError` preserves `linear_estimator_`, `selected_indices_`,
 `selected_ids_`, and class-count diagnostics; the two-stage predictor remains
 unfitted. The selected linear model remains available as a baseline.
 
+# Fitting budgets and stopping
+
+`max_epochs=200` remains the default for each stage. One SGD epoch processes
+that stage's observations; it is not equivalent to one MM solver iteration.
+The schedule, gradients, regularization, and sampling defaults are unchanged.
+
+`stopping="auto"` preserves prior behavior: fixed epochs without monitoring
+data, or validation-loss patience with explicit `validation_data`.
+`stopping="fixed"` disables patience, and `stopping="validation"` requires
+monitoring data. When monitoring data is supplied, the best validation
+checkpoint is selected even in fixed mode. Keep that monitoring set inside
+training data; it must not be the final test set or the CV scoring fold.
+
+`termination_criterion_` names the chosen stopping rule, and
+`criterion_reached_` says whether that rule was met. Completing a fixed epoch
+budget is a budget-completion criterion. Validation patience is a predictive
+monitoring criterion. Neither is an optimality test: `optimality_checked_`
+remains false, and `converged_`/`optimality_met_` are false because no certificate
+was established.
+
+`cap_reached_`, `fit_usable_`, and `cv_eligible_` distinguish these facts.
+Finite trained fits completing an epoch cap can receive CV scores without an
+automatic budget increase. Wall-time-truncated fits and untrained fallbacks
+are excluded by the search helpers. `n_iter_` counts SGD updates;
+`n_epochs_completed_` records processed passes. Two-stage models expose both
+components through `stage_diagnostics_`.
+
 # Reproducibility and diagnostics
 
 Each stage uses a private NumPy generator. Integer seeds, `Generator`, and
 legacy `RandomState` inputs are supported without mutating caller RNG state.
 The two-stage estimator records `stage_seeds_` for linear SGD, kernel SGD, and
 selection ties. Optional unique `observation_ids` are preserved with selection.
-No kernel row or Gram cache is retained. Public prediction uses bounded blocks.
+No kernel row or Gram cache is retained after fitting. Optional lazy training
+column storage is bounded by `kernel_cache_bytes`; public prediction uses
+bounded blocks.
 
 Standalone solvers record initial, final, and selected states as independent
 copies; separate optimizer-update and processed-observation counts; the
@@ -334,7 +456,7 @@ cited in the [overview](#overview). When using the package, cite the dissertatio
 and the software version:
 
 > Cheng, Chang (2026). *two-stage-sgd-dwd: Two-Stage DWD via Stochastic
-> Gradient Descent*, version 0.5.0 [Computer software].
+> Gradient Descent*, development version 0.7.0.dev20261003 [Computer software].
 
 Machine-readable citations are provided in [CITATION.cff](CITATION.cff)
 and [BibTeX format](docs/references.bib). Input filenames and checksums are

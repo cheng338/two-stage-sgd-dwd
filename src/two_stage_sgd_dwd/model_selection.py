@@ -53,11 +53,16 @@ def mnist_param_grid(prefix="", *, broad=False):
 
 
 def _require_trained(estimator):
-    """Do not let a usable diagnostic fallback compete as a trained model."""
+    """Reject fallbacks and truncated fits; fixed epoch caps remain eligible."""
     if getattr(estimator, "model_status_", None) == "untrained_fallback":
         raise TrainingError(
             "An untrained_fallback model is ineligible for parameter selection",
             status="untrained_fallback",
+        )
+    if not getattr(estimator, "cv_eligible_", True):
+        raise TrainingError(
+            "The model is ineligible for parameter selection under its stopping diagnostics",
+            status="ineligible_cv_fit",
         )
     if isinstance(estimator, Pipeline):
         _require_trained(estimator.steps[-1][1])
@@ -148,7 +153,10 @@ def make_search(estimator=None, param_grid=None, *, cv=5, scoring="accuracy",
     splitters or fold iterables pass through unchanged. ``scoring`` is a single
     sklearn scorer name, scalar scorer callable, or None for estimator.score;
     use :func:`neg_dwd_loss` for normalized DWD loss instead of accuracy.
-    Every scorer is guarded against untrained fallbacks and nonfinite scores.
+    Every scorer is guarded against untrained fallbacks, explicitly ineligible
+    fits (including wall-time truncation), and nonfinite scores. A trained model
+    that completes its epoch budget can receive a score without an optimality
+    certificate. Reaching an epoch cap does not automatically increase it.
     Errors propagate (``error_score='raise'``); selection failures are not
     silently excluded. The final refit is checked for untrained fallbacks too.
 
@@ -157,7 +165,9 @@ def make_search(estimator=None, param_grid=None, *, cv=5, scoring="accuracy",
     ``validation_data``. Use fixed epochs for this helper. Any early stopping
     requires a separate workflow that creates monitoring data inside each
     training fold. Reserve held-out data for evaluation after model selection.
-    No adaptive expansion or held-out evaluation is performed here.
+    No adaptive expansion or held-out evaluation is performed here. Ordinary
+    fixed-grid CV refits its selected candidate without an adaptive-boundary
+    qualification; use the separate adaptive example for that review policy.
     """
     if param_grid is None:
         raise ValueError(
