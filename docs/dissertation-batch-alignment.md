@@ -162,7 +162,7 @@ update per epoch, rather than single-observation SGD.
 
 Under independent replacement sampling, conditional on the training history,
 the expected batch gradient equals the full average-loss gradient at the
-current iterate; the kernel regularizer adds once. Thus the default retains
+current iterate; the kernel regularizer is applied once. Thus the default retains
 the conditional-unbiasedness property stated in the excerpt. Under the
 optional random-reshuffling scheme,
 later batches are drawn from the remaining observations, and the current

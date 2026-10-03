@@ -30,6 +30,38 @@ Searching every available kernel family needlessly can increase selection
 variability and computational cost. API availability is not a recommendation
 to include every family in a benchmark.
 
+## Supported kernel contracts
+
+Named kernels: `linear`, `rbf`, `poly`/`polynomial`, `laplacian`, `cosine`,
+`chi2`, `sigmoid`, and `additive_chi2`. Polynomial degree must be a nonnegative
+integer, its coef0 nonnegative, and built-in gamma finite and nonnegative.
+Chi-square kernels require nonnegative features. Built-in gamma belongs only
+at the top level; use `kernel_kws` for degree/coef0. Unsupported keywords
+raise errors rather than being silently ignored.
+
+Matrix callables follow the earlier DWD package convention:
+`kernel(X_left, X_right, **kernel_kws)` returns an n_left by n_right matrix.
+Only explicitly supplied keyword arguments reach the callable. Its top-level
+gamma is ignored; a custom gamma belongs in its keyword dictionary. These are
+matrix callables, not sklearn's scalar-pair callable convention. Callables
+must be pickleable themselves to serialize a model using them.
+
+Known PSD families need only analytic training diagonals. Sigmoid and
+additive_chi2 are not guaranteed PSD, and custom callables are not assumed
+valid. Those three cases require a one-time full training-Gram symmetry/PSD
+check, O(m^2) temporary memory and an eigendecomposition, before SGD. A failing
+check raises an error. The check allows small floating-point eigenvalue
+roundoff but does not clip, symmetrize, shift, or repair the matrix. It cannot
+certify a custom function on unobserved inputs; symmetric PSD behavior over
+its intended domain remains the caller's contract.
+
+No Gram matrix is retained after preparation. Training and prediction then
+evaluate bounded blocks on demand. The SGD bound uses the maximum diagonal
+on the actual kernel fitting subset, so changing kernels also changes the
+safe step-size constant. Preparation time/work is reported separately from
+optimizer and checkpoint work. A precomputed kernel is unsupported because
+the two-stage screening procedure needs feature rows.
+
 ## Validation and scoring
 
 Use stratified fivefold CV as a reasonable default for independent binary
@@ -78,9 +110,9 @@ Evaluate final predictive performance on an untouched test set. If there is
 no separate test set, use nested CV to assess the entire tuning procedure.
 The best score from a tuning search is optimistic as an assessment of its
 selected model; see [Varma and Simon (2006)](https://link.springer.com/article/10.1186/1471-2105-7-91).
-The package helper builds the inner parameter search, not an automatic outer
-assessment study. Saving seeds, folds, full CV results, failure reasons, and
-tuning cost is part of the eventual experiment layer.
+The package helper builds the inner parameter search; the study must supply
+the outer evaluation. Record seeds, folds, full CV results, failure reasons,
+and tuning cost with the experiment.
 
 ## Similar interface, explicit differences
 
@@ -104,6 +136,8 @@ The mean loss is over the actual retained set; changing retention changes the
 fitted problem. The two packages also use different screening and fitting
 procedures, so matching parameter values or grid ranges does not produce
 equivalent predictors.
+
+## MNIST parameter grids
 
 `mnist_param_grid` is a two-stage starting grid for pixels divided by 255.
 It fixes RBF and jointly considers these candidates:
@@ -139,9 +173,8 @@ recorded 7-versus-8 training-only checks; this does not establish that 5% fails
 on every dataset.
 Searching retention changes that guide's fixed-5%, nine-candidate study and
 must be reported as an alternative protocol.
-The package grid is a reusable search specification; dissertation experiments
-require their own declared protocol. Empirical exploration and confirmation
-of useful settings remain distinct from the preset definition.
+Specify the grid in the dissertation's experiment protocol. Select parameters
+using training data, then evaluate their performance on independent data.
 
 ## Training-only adaptive MNIST runner
 
@@ -152,6 +185,9 @@ per stage, batch size one, independent sampling with replacement, a common
 random-state seed, and one numerical-library thread. All candidates share the
 same saved folds and stage seeds. Changing an epoch budget creates a different
 optimization comparison; the default does not certify convergence.
+
+Run the search explicitly with `--run`, `--data-dir`, and `--output-dir`;
+without `--run`, the command prints settings only.
 
 The linear first stage and its ranking depend on the fitting fold and seed,
 not on lambd or gamma. The runner caches them within each fold and reuses the
@@ -172,12 +208,14 @@ records retain that setting. The 30% default aligns the software conventions
 with the ensemble package and is not selected from those exploratory scores.
 
 After the initial grid, the runner allows at most three expansion rounds.
-Any eligible candidate within 1e-12 of the best score can trigger an explored
-lambd or gamma endpoint. Each reached side moves outward by its neighboring
-logarithmic gap, capped at one decade; the complete new Cartesian shell,
-including cross-corners, uses every fixed retention fraction. All valid
-attempted coordinates, including failed candidates, define the explored
-bounds, and no attempted candidate is silently retried.
+Any eligible candidate within 1e-12 of the best score at an explored lambd or
+gamma endpoint can trigger expansion. Each reached side moves outward by its
+neighboring logarithmic gap, capped at one decade; the complete new Cartesian shell,
+including cross-corners, uses every fixed retention fraction. All numerically
+valid coordinates that were attempted define the explored bounds, including
+coordinates from recorded ineligible selections. Completed candidate records
+are not evaluated again. An unexpected fitting error stops the run and is
+retried only on an explicit resume.
 
 The runner stops further expansion after two complete rounds that do not
 improve the best mean score by more than 1e-12. It then permits up to two
@@ -188,9 +226,11 @@ distinct grid candidates, excluding the separate default control. A proposed
 round must fit in the remaining budget in full; budget-limited rounds and
 unresolved boundaries are reported rather than selectively truncated.
 
-Run the search explicitly with `--run`, `--data-dir`, and `--output-dir`;
-without `--run`, the command prints settings only. `--resume` reuses saved
-records and pending stages only when configuration and input hashes match.
+`--resume` reuses completed candidate records and pending stages only when
+configuration, package/example source hashes, input hashes, observation IDs,
+and folds match. An uncommitted candidate restarts from the beginning; this is
+not an optimizer-state resume. Dependency versions are not checked by this
+runner, so retain the original numerical environment for reproducibility.
 The output preserves configuration, folds, per-candidate records, stage
 history, the separate control, and selection/boundary diagnostics. These are
 exploratory tuning outputs, not independent test-error estimates. A boundary
@@ -205,35 +245,3 @@ sizes. Its focused follow-up grid is task-specific. The historical 150-candidate
 initial grid and 486-candidate broader preset definition included 5%; their
 records are preserved. Current recommended presets contain 125/405 candidates
 and omit 5%, while the inherited software defaults remain unchanged.
-
-## Supported kernel contracts
-
-Named kernels: `linear`, `rbf`, `poly`/`polynomial`, `laplacian`, `cosine`,
-`chi2`, `sigmoid`, and `additive_chi2`. Polynomial degree must be a nonnegative
-integer, its coef0 nonnegative, and built-in gamma finite and nonnegative.
-Chi-square kernels require nonnegative features. Built-in gamma belongs only
-at the top level; use `kernel_kws` for degree/coef0. Unsupported keywords
-raise errors rather than being silently ignored.
-
-Matrix callables follow the earlier DWD package convention:
-`kernel(X_left, X_right, **kernel_kws)` returns an n_left by n_right matrix.
-Only explicitly supplied keyword arguments reach the callable. Its top-level
-gamma is ignored; a custom gamma belongs in its keyword dictionary. These are
-matrix callables, not sklearn's scalar-pair callable convention. Callables
-must be pickleable themselves to serialize a model using them.
-
-Known PSD families need only analytic training diagonals. Sigmoid and
-additive_chi2 are not guaranteed PSD, and custom callables are not assumed
-valid. Those three cases require a one-time full training-Gram symmetry/PSD
-check, O(m^2) temporary memory and an eigendecomposition, before SGD. A failing
-check raises an error. The check allows small floating-point eigenvalue
-roundoff but does not clip, symmetrize, shift, or repair the matrix. It cannot
-certify a custom function on unobserved inputs; symmetric PSD behavior over
-its intended domain remains the caller's contract.
-
-No Gram matrix is retained after preparation. Training and prediction then
-evaluate bounded blocks on demand. The SGD bound uses the maximum diagonal
-on the actual kernel fitting subset, so changing kernels also changes the
-safe step-size constant. Preparation time/work is reported separately from
-optimizer and checkpoint work. A precomputed kernel is unsupported because
-the two-stage screening procedure needs feature rows.

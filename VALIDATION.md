@@ -99,6 +99,20 @@ An earlier short synthetic environment comparison found `py12_df` and
 `py12_df_aocl` effectively tied; AOCL was marginally faster and was selected
 for development. This does not establish an environment-level speed claim.
 
+## Reproducing the checks
+
+Installation uses the declared runtime dependencies. Verification uses isolated
+test and build tools without altering the shared Conda environments. The wheel
+is installed into a separate verification directory.
+
+To repeat the portable correctness suite after installation:
+
+```console
+python -m pytest -q tests
+python examples/synthetic_example.py
+python examples/kernel_search_example.py
+```
+
 ## Boundaries
 
 The package has been verified on this Windows/Python environment. Other
@@ -109,17 +123,6 @@ noninferiority, screening superiority, or official-test performance. Selected
 parameters are conditional on the stated data, seeds, and finite SGD budgets.
 
 The committee requirements table distinguishes package support from unfinished
-experimental and dissertation work. Input hashes and the handoff/current
-chapter source-hash discrepancy are recorded in `docs/provenance.json`.
-
-To repeat the portable correctness suite after installation:
-
-```console
-python -m pytest -q tests
-python examples/synthetic_example.py
-python examples/kernel_search_example.py
-```
-
-Installation uses the declared runtime dependencies. Verification uses isolated
-test and build tools without altering the shared Conda environments. The wheel
-is installed into a separate verification directory.
+experimental and dissertation work. Input hashes and the source-hash difference
+between the supplied chapter and the current chapter are recorded in
+`docs/provenance.json`.

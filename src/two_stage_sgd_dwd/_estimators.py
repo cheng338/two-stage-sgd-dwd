@@ -434,7 +434,7 @@ class KernelSGDDWD(_BaseDWD):
 
     Kernel values are evaluated on demand. No persistent Gram matrix is kept.
     ``lambd`` uses exactly the regularization convention of the dwd package.
-    The default is 0.0005; the RKHS regularization gradient is 2*lambd*h.
+    The default is 1e-6; the RKHS regularization gradient is 2*lambd*h.
     Named PSD kernels use analytic diagonals; custom/untrusted kernels require
     a transient training Gram check before fitting. Callable kernels accept
     two entire feature matrices and return the corresponding kernel matrix.

@@ -7,11 +7,13 @@ classifier on observations selected near the linear decision boundary.
 
 The following methods are implemented:
 
-- `LinearSGDDWD`: unit-ball projected linear SGD with a separate free intercept.
-- `KernelSGDDWD`: kernel SGD in an RKHS with penalty `lambd * ||h||^2`
-  and a free intercept.
-- `TwoStageDWDClassifier`: linear fit, global selection by absolute score,
-  then kernel SGD on the selected subset.
+- **Linear DWD** (`LinearSGDDWD`): fitted using projected SGD with a unit-ball
+  constraint on the slope and a separate free intercept.
+- **Kernel DWD** (`KernelSGDDWD`): fitted using SGD in an RKHS with penalty
+  `lambd * ||h||^2` and a free intercept.
+- **Two-stage DWD** (`TwoStageDWDClassifier`): fits linear DWD, selects
+  observations globally by absolute linear score, then fits kernel DWD on the
+  selected subset. Both DWD fits use SGD.
 
 The package implements its own SGD solvers. It does not call `dwd`, a SOCP
 solver, CVXPY, or scikit-learn's `SGDClassifier`.
@@ -111,8 +113,8 @@ accuracy, one worker, and failure on invalid fits. For lowest unpenalized
 validation DWD loss, pass the exported `neg_dwd_loss` scorer instead.
 The choice of metric should be fixed before searching.
 
-Every fold refits preprocessing, linear screening, and the kernel stage using
-only its training rows. The helper rejects `validation_data`; fixed epoch
+Every fold refits any supplied preprocessing, linear screening, and the kernel
+stage using only its training rows. The helper rejects `validation_data`; fixed epoch
 budgets avoid using the scoring fold to select SGD checkpoints. Early stopping
 within CV requires another monitoring split inside each training fold.
 Reserve independent test data for final evaluation, or use nested CV if no
@@ -179,8 +181,10 @@ separate control, then searches the numeric grid. It allows up to three
 boundary expansions and two geometric-refinement rounds around the best
 three distinct lambd/gamma pairs, with at most 2,000 grid candidates. Two
 complete expansion rounds without improvement stop further expansion.
-Every proposed round covers all five fixed retention fractions; failed or
-previously evaluated candidates are not retried automatically. Earlier
+Every proposed round covers all five fixed retention fractions. Completed
+candidate records, including ineligible selections, are not evaluated again.
+An unexpected fitting error stops the run; an explicit resume retries the
+uncommitted candidate from the beginning. Earlier
 exploratory runs used an explicit 5% provisional control; their records retain
 that setting. The 30% software default aligns with the ensemble package;
 this alignment does not establish 30% as the best-performing retention.

@@ -22,7 +22,7 @@
 ## 0.4.2 - package naming, 2026-10-01
 
 - Name the distribution `two-stage-sgd-dwd` and the Python import package
-  `two_stage_sgd_dwd` to identify its stochastic gradient descent method.
+  `two_stage_sgd_dwd` to identify its stochastic gradient descent optimization algorithm.
 - Update imports, examples, and software citations. Solver behavior is unchanged.
 
 ## 0.4.1 - citations and source references, 2026-10-01

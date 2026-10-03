@@ -138,6 +138,13 @@ so overshoot is possible. A completed finite update remains usable after a cap.
 
 ## Fitted state and failure status
 
+Fitted hyperparameters are frozen for prediction and objective diagnostics;
+changing constructor parameters takes effect on the next fit. A fitted
+`KernelSGDDWD` still reads its current `prediction_batch_size` for scoring
+blocks. For a fitted two-stage model, adjust that parameter on
+`kernel_estimator_`; changing it on the outer estimator applies to the next
+fit. This setting controls scoring memory, not the fitted coefficients.
+
 Standalone models expose `initial_state_`, `final_state_`, `selected_state_`,
 `selected_iteration_`, `n_updates_`, `n_samples_seen_`, `n_epochs_`, `history_`, `learning_rate_B_`,
 `rng_state_`, `fit_seconds_`, `stop_reason_`, and `model_status_`.
@@ -166,9 +173,9 @@ kernel stage does not erase a valid linear baseline. Prediction is blocked
 after failed fitting or invalid refitting. Validation and training inputs
 must be finite; clipping nonfinite values would alter the specified method.
 
-The library does not inspect test labels while fitting. Statistical replication,
-held-out experiment orchestration, watchdogs, process peak-memory measurement,
-calibration, and dissertation tables belong to the later experiment layer.
+The library does not inspect test labels while fitting. Experiment code must
+handle statistical replication, held-out evaluation, watchdogs, process
+peak-memory measurement, calibration, and dissertation tables.
 Library timing fields are diagnostics, not a completed controlled benchmark.
 `fit_seconds_` includes input validation and publishing fitted arrays, including
 the kernel basis copy. `update_seconds_` and `validation_checkpoint_seconds_`
@@ -190,10 +197,10 @@ diagnostic if its cap expires before any optimizer step.
 
 ## Relationship to the previous packages
 
-`dwd` and `ensemble-dwd` use different solvers/frameworks. Neither is a runtime
-dependency. NumPy/SciPy provide numerical operations; sklearn provides estimator
-validation, cloning, labels, and the classifier interface. Tiny SciPy optimization
-oracles appear only in tests. No SOCP solver participates in fitting.
+`dwd` and `ensemble-dwd` are not runtime dependencies. NumPy/SciPy provide
+numerical operations; sklearn provides estimator validation, cloning, labels,
+and the classifier interface. Tiny SciPy optimization oracles appear only in
+tests. No SOCP solver participates in fitting.
 
 The `kernel`/`gamma`/`kernel_kws` interface, `lambd` objective convention,
 explicit whole-estimator cross-validation, and a logarithmic MNIST grid helper
@@ -203,9 +210,6 @@ The original 5% remains available explicitly but is excluded from current
 recommended presets. Their solvers are not reused.
 The sole regularization argument is `lambd`, with default 1e-6; its fitted
 value is recorded in `lambd_`.
-Fitted hyperparameters are frozen for prediction and objective diagnostics;
-changing constructor parameters takes effect on the next fit. Prediction
-block size remains adjustable because it only controls memory use.
 See [statistical rationale and kernel details](kernels-and-tuning.md).
 
 The practical algorithm is distinct from regularized-intercept theoretical
