@@ -37,17 +37,6 @@ Kernel DWD,"** of:
 > Purdue University, Department of Statistics. Chapter 3, revision of
 > October 1, 2026.
 
-The DWD and kernel-DWD foundations are:
-
-- Marron, J. S., Todd, M. J., and Ahn, J. (2007).
-  *Distance-Weighted Discrimination*. Journal of the American Statistical
-  Association, 102(480), 1267–1271.
-  [doi:10.1198/016214507000001120](https://doi.org/10.1198/016214507000001120).
-- Wang, B., and Zou, H. (2018). *Another Look at Distance-Weighted
-  Discrimination*. Journal of the Royal Statistical Society: Series B
-  (Statistical Methodology), 80(1), 177–198.
-  [doi:10.1111/rssb.12244](https://doi.org/10.1111/rssb.12244).
-
 When using the package, cite the software version and the dissertation:
 
 > Cheng, Chang (2026). *two-stage-sgd-dwd: Two-Stage DWD via Stochastic

@@ -7,10 +7,9 @@ the main nonlinear kernel. A second-stage `kernel="linear"` is also available,
 but that penalized RKHS model is not the same constrained estimator as the
 first-stage linear baseline.
 
-Linear and Gaussian kernels and fivefold tuning have direct precedent in
-[Wang and Zou, Another Look at Distance-Weighted Discrimination, JRSS B (2018)](https://academic.oup.com/jrsssb/article/80/1/177/7048416).
-That supports these as reasonable starting choices; it does not validate the
-new screening heuristic or transfer their exact-minimizer theory to finite SGD.
+Kernel and cross-validation choices are starting points for empirical
+assessment. They do not establish the benefit of screening or convergence
+of finite SGD.
 
 Jointly search the RBF bandwidth and regularization coefficient over positive
 logarithmic ranges. Start with a manageable coarse grid, inspect whether the
