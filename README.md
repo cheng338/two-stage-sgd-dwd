@@ -5,14 +5,6 @@
 two-stage procedure first fits a linear classifier, then trains a kernel
 classifier on observations selected near the linear decision boundary.
 
-Chang Cheng developed this package from his original research scripts
-accompanying his dissertation. The two-stage method follows Chapter 3,
-**"Our Earlier Attempt on Kernel DWD"**, of:
-
-> Cheng, Chang (2026). *Overcoming the Curses of Dimensionality and
-> Kernelization: Scalable DWD and Supervised NMF*. Doctoral dissertation
-> manuscript, Purdue University, Department of Statistics.
-
 The following methods are implemented:
 
 - `LinearSGDDWD`: unit-ball projected linear SGD with a separate free intercept.
@@ -23,6 +15,14 @@ The following methods are implemented:
 
 The package implements its own SGD solvers. It does not call `dwd`, a SOCP
 solver, CVXPY, or scikit-learn's `SGDClassifier`.
+
+Chang Cheng developed this package from his original research scripts
+accompanying his dissertation. The two-stage method follows Chapter 3,
+**"Our Earlier Attempt on Kernel DWD"**, of:
+
+> Cheng, Chang (2026). *Overcoming the Curses of Dimensionality and
+> Kernelization: Scalable DWD and Supervised NMF*. Doctoral dissertation
+> manuscript, Purdue University, Department of Statistics.
 
 # Installation
 
