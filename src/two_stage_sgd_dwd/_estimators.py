@@ -95,9 +95,84 @@ def _controls(est):
         _integer(est.batch_size, "batch_size (positive integer or 'full')")
     if not isinstance(est.sampling, str) or est.sampling not in ("shuffle", "with_replacement"):
         raise ValueError("sampling must be 'shuffle' or 'with_replacement'")
+    if not isinstance(est.stopping, str) or est.stopping not in ("auto", "fixed", "validation"):
+        raise ValueError("stopping must be 'auto', 'fixed', or 'validation'")
     if est.max_seconds is not None:
         _positive(est.max_seconds, "max_seconds")
     _generator(est.random_state)
+
+
+def _resolve_stopping(est, validation):
+    if est.stopping == "validation" and validation is None:
+        raise ValueError("stopping='validation' requires explicit validation_data")
+    est.stopping_ = ("validation" if validation is not None else "fixed") if est.stopping == "auto" else est.stopping
+
+
+def _fit_diagnostics(est):
+    """Describe usability and stopping without inferring SGD optimality.
+
+    n_iter_ counts optimizer updates, not MM iterations or epochs. Completing a
+    fixed epoch budget meets only that budget criterion. No stationarity or
+    optimality certificate is computed by this solver.
+    """
+    reason = est.stop_reason_
+    est.n_iter_ = int(getattr(est, "n_updates_", 0))
+    est.returned_iteration_ = int(getattr(est, "selected_iteration_", 0))
+    est.n_epochs_completed_ = float(getattr(est, "n_epochs_", 0.0))
+    est.termination_reason_ = reason
+    est.termination_criterion_ = "validation_patience" if est.stopping_ == "validation" else "fixed_epochs"
+    est.iteration_limit_reached_ = est.n_epochs_completed_ >= est.max_epochs
+    est.time_limit_reached_ = reason in ("time_cap", "time_cap_no_validation")
+    est.cap_reached_ = est.iteration_limit_reached_ or est.time_limit_reached_
+    est.fit_usable_ = bool(getattr(est, "_fitted_", False) and est.model_status_ == "trained")
+    est.criterion_reached_ = bool(est.fit_usable_ and (
+        reason == "validation_patience" if est.stopping_ == "validation"
+        else est.iteration_limit_reached_))
+    est.checkpoint_selection_ = "validation_loss" if getattr(est, "validation_available_", False) else "final_iterate"
+    est.optimality_checked_ = False
+    est.optimality_met_ = False
+    est.converged_ = False
+    # A finite epoch-limited model remains a valid fixed-budget CV candidate.
+    # Wall-time truncation, no-update fallbacks and failed fits do not.
+    est.cv_eligible_ = bool(est.fit_usable_ and not est.time_limit_reached_)
+
+
+_STAGE_DIAGNOSTICS = (
+    "n_iter_", "returned_iteration_", "n_epochs_completed_", "stopping_",
+    "termination_reason_", "termination_criterion_", "criterion_reached_",
+    "iteration_limit_reached_", "time_limit_reached_", "cap_reached_",
+    "fit_usable_", "cv_eligible_", "checkpoint_selection_",
+    "optimality_checked_", "optimality_met_", "converged_", "model_status_",
+)
+
+
+def _two_stage_diagnostics(est):
+    """Keep both stages visible, including partial and failed pipeline fits."""
+    models = [getattr(est, name, None) for name in ("linear_estimator_", "kernel_estimator_")]
+    est.stage_diagnostics_ = {
+        stage: None if model is None else {
+            name[:-1]: copy.deepcopy(getattr(model, name))
+            for name in _STAGE_DIAGNOSTICS if hasattr(model, name)
+        }
+        for stage, model in zip(("linear", "kernel"), models)
+    }
+    for name, default, dtype in (("n_iter_", 0, np.int64), ("returned_iteration_", 0, np.int64),
+                                 ("n_epochs_completed_", 0.0, float),
+                                 ("converged_", False, bool), ("optimality_met_", False, bool),
+                                 ("optimality_checked_", False, bool)):
+        setattr(est, name, np.asarray([getattr(model, name, default) for model in models], dtype=dtype))
+    est.termination_reason_ = est.stop_reason_
+    est.termination_criterion_ = "validation_patience" if est.stopping_ == "validation" else "fixed_epochs"
+    est.fit_usable_ = bool(getattr(est, "_fitted_", False) and
+                          all(getattr(model, "fit_usable_", False) for model in models))
+    est.cv_eligible_ = bool(est.fit_usable_ and
+                           all(getattr(model, "cv_eligible_", False) for model in models))
+    est.criterion_reached_ = bool(est.fit_usable_ and
+                                 all(getattr(model, "criterion_reached_", False) for model in models))
+    est.iteration_limit_reached_ = any(getattr(model, "iteration_limit_reached_", False) for model in models)
+    est.time_limit_reached_ = (est.stop_reason_ in ("time_cap", "time_cap_no_validation") or
+                               any(getattr(model, "time_limit_reached_", False) for model in models))
+    est.cap_reached_ = est.iteration_limit_reached_ or est.time_limit_reached_
 
 
 def _clear(est):
@@ -272,7 +347,8 @@ def _optimize(kind, X, y, validation, rng, est, deadline, callback=None):
                 finally:
                     validation_time += time.perf_counter() - began_validation
                 _check_deadline(deadline)
-                if samples_seen >= est.min_epochs * m and misses >= est.patience:
+                if (est.stopping_ == "validation" and samples_seen >= est.min_epochs * m
+                        and misses >= est.patience):
                     stop = "validation_patience"
                     break
         except _Deadline:
@@ -326,6 +402,7 @@ class _BaseDWD(ClassifierMixin, BaseEstimator):
         if callback is not None and not callable(callback):
             raise ValueError("checkpoint_callback must be callable or None")
         X, original_y, encoded, validation = _training_data(self, X, y, validation_data)
+        _resolve_stopping(self, validation)
         if self.max_seconds is not None:
             local_deadline = started + self.max_seconds
             deadline = local_deadline if deadline is None else min(deadline, local_deadline)
@@ -351,6 +428,7 @@ class _BaseDWD(ClassifierMixin, BaseEstimator):
                     else:
                         self.model_status_, self.stop_reason_ = "kernel_preparation_timeout", "time_cap"
                         self.fit_seconds_ = time.perf_counter() - started
+                        _fit_diagnostics(self)
                         raise TrainingError("Deadline reached before kernel validation completed",
                                             "kernel_preparation_timeout") from exc
                 except (ValueError, FloatingPointError, OverflowError) as exc:
@@ -364,6 +442,7 @@ class _BaseDWD(ClassifierMixin, BaseEstimator):
             self.model_status_, self.stop_reason_ = "numerical_failure", "numerical_failure"
             self.error_ = str(exc)
             self.fit_seconds_ = time.perf_counter() - started
+            _fit_diagnostics(self)
             raise NumericalFailure(str(exc)) from exc
         for key, value in result.items():
             setattr(self, key, value)
@@ -374,6 +453,7 @@ class _BaseDWD(ClassifierMixin, BaseEstimator):
         self.objective_normalization_ = "mean_over_actual_fitting_set"
         if self.model_status_ == "numerical_failure":
             self.fit_seconds_ = time.perf_counter() - started
+            _fit_diagnostics(self)
             raise NumericalFailure(self.error_)
         state = self.selected_state_
         self.intercept_ = np.array([state["intercept"]])
@@ -387,6 +467,7 @@ class _BaseDWD(ClassifierMixin, BaseEstimator):
         if deadline is not None and finished >= deadline:
             self.stop_reason_ = "time_cap" if self.validation_available_ else "time_cap_no_validation"
         self.fit_seconds_ = finished - started
+        _fit_diagnostics(self)
         return self
 
 
@@ -399,10 +480,18 @@ class LinearSGDDWD(_BaseDWD):
     sampling='shuffle' optionally visits each row once in random order per epoch.
     With validation_data, retain the lowest post-update validation loss; otherwise
     retain the final iterate. Data are not automatically rescaled.
+
+    stopping='auto' uses validation patience when validation_data is supplied,
+    and the fixed epoch budget otherwise. 'fixed' disables patience while still
+    monitoring supplied validation data and retaining its best checkpoint.
+    'validation' requires explicit validation_data. n_iter_ counts SGD updates;
+    n_epochs_completed_ counts processed observations divided by fitting size.
+    criterion_reached_ reports the named termination_criterion_, never
+    optimality. converged_=False is accompanied by optimality_checked_=False.
     """
     def __init__(self, *, batch_size=1, sampling="with_replacement", max_epochs=200,
                  validation_interval=5, patience=3,
-                 min_epochs=10, tol=1e-4, random_state=None, max_seconds=None):
+                 min_epochs=10, tol=1e-4, stopping="auto", random_state=None, max_seconds=None):
         self.batch_size = batch_size
         self.sampling = sampling
         self.max_epochs = max_epochs
@@ -410,6 +499,7 @@ class LinearSGDDWD(_BaseDWD):
         self.patience = patience
         self.min_epochs = min_epochs
         self.tol = tol
+        self.stopping = stopping
         self.random_state = random_state
         self.max_seconds = max_seconds
 
@@ -434,19 +524,24 @@ class KernelSGDDWD(_BaseDWD):
 
     Kernel values are evaluated on demand. No persistent Gram matrix is kept.
     ``lambd`` uses exactly the regularization convention of the dwd package.
-    The default is 0.0005; the RKHS regularization gradient is 2*lambd*h.
+    The default is 0.000001; the RKHS regularization gradient is 2*lambd*h.
     Named PSD kernels use analytic diagonals; custom/untrusted kernels require
     a transient training Gram check before fitting. Callable kernels accept
     two entire feature matrices and return the corresponding kernel matrix.
     Labels are incorporated into coefficient updates exactly once.
     batch_size controls averaged optimizer updates; prediction_batch_size
     bounds kernel scoring blocks without changing the update definition.
+    stopping and fitting diagnostics follow LinearSGDDWD: epoch-limited finite
+    fits are usable without an optimality certificate. n_iter_ counts SGD
+    updates, not MM iterations; n_epochs_completed_ records sample-equivalent
+    epochs. Explicit validation data also select the best checkpoint when
+    stopping='fixed', which disables only patience-based early stopping.
     """
     def __init__(self, *, lambd=1e-6, kernel="rbf", gamma="scale",
                  kernel_kws=None, batch_size=1,
                  sampling="with_replacement", max_epochs=200,
                  validation_interval=5, patience=3, min_epochs=10, tol=1e-4,
-                 random_state=None, max_seconds=None, prediction_batch_size=256):
+                 stopping="auto", random_state=None, max_seconds=None, prediction_batch_size=256):
         self.lambd = lambd
         self.kernel = kernel
         self.gamma = gamma
@@ -458,6 +553,7 @@ class KernelSGDDWD(_BaseDWD):
         self.patience = patience
         self.min_epochs = min_epochs
         self.tol = tol
+        self.stopping = stopping
         self.random_state = random_state
         self.max_seconds = max_seconds
         self.prediction_batch_size = prediction_batch_size
@@ -509,12 +605,17 @@ class TwoStageDWDClassifier(_BaseDWD):
     A one-class retained set raises SelectionError and preserves linear-stage
     diagnostics. Its kernel objective averages over the retained observations.
     batch_size and sampling apply to both stages with their actual fitting sizes.
+    stopping applies to both stages as in LinearSGDDWD. stage_diagnostics_
+    retains each stage's stopping and usability facts; n_iter_,
+    returned_iteration_, n_epochs_completed_ and optimality flags are arrays in
+    linear, kernel order. Aggregate cv_eligible_ requires both stages to be
+    usable without wall-time truncation. A reached criterion is not optimality.
     """
     def __init__(self, *, retention_fraction=0.3, lambd=1e-6,
                  kernel="rbf", gamma="scale", kernel_kws=None,
                  batch_size=1, sampling="with_replacement",
                  max_epochs=200, validation_interval=5, patience=3, min_epochs=10,
-                 tol=1e-4, random_state=None, max_seconds=None,
+                 tol=1e-4, stopping="auto", random_state=None, max_seconds=None,
                  linear_max_seconds=None, prediction_batch_size=256):
         self.retention_fraction = retention_fraction
         self.lambd = lambd
@@ -528,6 +629,7 @@ class TwoStageDWDClassifier(_BaseDWD):
         self.patience = patience
         self.min_epochs = min_epochs
         self.tol = tol
+        self.stopping = stopping
         self.random_state = random_state
         self.max_seconds = max_seconds
         self.linear_max_seconds = linear_max_seconds
@@ -547,7 +649,8 @@ class TwoStageDWDClassifier(_BaseDWD):
             _positive(self.linear_max_seconds, "linear_max_seconds")
         if checkpoint_callback is not None and not callable(checkpoint_callback):
             raise ValueError("checkpoint_callback must be callable or None")
-        X, y, encoded, _ = _training_data(self, X, y, validation_data)
+        X, y, encoded, validation = _training_data(self, X, y, validation_data)
+        _resolve_stopping(self, validation)
         # Resolve data-dependent gamma on the complete training fold, before
         # screening; the retained kernel stage receives this fixed bandwidth.
         _set_kernel(self, X)
@@ -561,7 +664,8 @@ class TwoStageDWDClassifier(_BaseDWD):
         common = dict(batch_size=self.batch_size, sampling=self.sampling,
                       max_epochs=self.max_epochs,
                       validation_interval=self.validation_interval,
-                      patience=self.patience, min_epochs=self.min_epochs, tol=self.tol)
+                      patience=self.patience, min_epochs=self.min_epochs, tol=self.tol,
+                      stopping=self.stopping)
         self.linear_estimator_ = LinearSGDDWD(**common,
             random_state=self.stage_seeds_["linear_sgd"], max_seconds=self.linear_max_seconds)
         def callback_for(stage):
@@ -574,10 +678,12 @@ class TwoStageDWDClassifier(_BaseDWD):
         except NumericalFailure as exc:
             self.model_status_, self.stop_reason_ = "linear_stage_failure", "numerical_failure"
             self.fit_seconds_ = time.perf_counter() - started
+            _two_stage_diagnostics(self)
             raise TrainingError(str(exc), "linear_stage_failure") from exc
         if self.linear_estimator_.model_status_ != "trained":
             self.model_status_, self.stop_reason_ = "linear_stage_failure", self.linear_estimator_.stop_reason_
             self.fit_seconds_ = time.perf_counter() - started
+            _two_stage_diagnostics(self)
             raise TrainingError("The linear stage produced no trained finite state", "linear_stage_failure")
         began_selection = time.perf_counter()
         try:
@@ -596,15 +702,18 @@ class TwoStageDWDClassifier(_BaseDWD):
             if np.any(self.selected_class_counts_ == 0):
                 self.model_status_, self.stop_reason_ = "single_class_selection", "selection_failure"
                 self.fit_seconds_ = time.perf_counter() - started
+                _two_stage_diagnostics(self)
                 raise SelectionError("The globally selected subset contains only one class")
             _check_deadline(deadline)
         except _Deadline as exc:
             self.model_status_, self.stop_reason_ = "kernel_stage_unrun", "time_cap"
             self.fit_seconds_ = time.perf_counter() - started
+            _two_stage_diagnostics(self)
             raise TrainingError("Pipeline deadline reached before kernel fitting", "kernel_stage_unrun") from exc
         except (FloatingPointError, OverflowError) as exc:
             self.model_status_, self.stop_reason_ = "numerical_failure", "numerical_failure"
             self.fit_seconds_ = time.perf_counter() - started
+            _two_stage_diagnostics(self)
             raise NumericalFailure(str(exc)) from exc
         finally:
             self.selection_seconds_ = time.perf_counter() - began_selection
@@ -621,15 +730,18 @@ class TwoStageDWDClassifier(_BaseDWD):
         except NumericalFailure:
             self.model_status_, self.stop_reason_ = "numerical_failure", "numerical_failure"
             self.fit_seconds_ = time.perf_counter() - started
+            _two_stage_diagnostics(self)
             raise
         except TrainingError as exc:
             self.model_status_, self.stop_reason_ = exc.status, kernel.stop_reason_
             self.fit_seconds_ = time.perf_counter() - started
+            _two_stage_diagnostics(self)
             raise
         self.model_status_, self.stop_reason_ = kernel.model_status_, kernel.stop_reason_
         self.fit_seconds_ = time.perf_counter() - started
         self.objective_normalization_ = "mean_over_retained_set"
         self._fitted_ = True
+        _two_stage_diagnostics(self)
         return self
 
     def decision_function(self, X):

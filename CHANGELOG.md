@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased - 0.6.0.dev20261003
+
+- Add explicit fixed-epoch and validation-patience stopping controls, with
+  separate cap, model usability, CV eligibility, and optimality diagnostics.
+  Preserve SGD updates and the default 200 epochs per stage.
+- Align adaptive tuning with the ensemble workflow: three expansion rounds,
+  500 candidates, valid conditional factor-two brackets, and two stable
+  completed local rounds. Refinement repeats until qualified or budget-limited.
+- Hold unresolved searches as `needs_review`, including invalid or missing
+  conditional neighbors. Export locked final-evaluation settings only after
+  acceptance; retain training-only data access and exact-identity resume.
+
 ## 0.5.0 - MNIST tuning ranges and adaptive exploration, 2026-10-01
 
 - Adopt the ensemble DWD package's MNIST lambda and gamma ranges and its

@@ -120,14 +120,32 @@ derivative Lipschitz constant; the +1 accounts for the free intercept.
 This finite training bound does not establish a global population bound.
 Both bounds are computed from the actual stage inputs. Float64 is used.
 
+`stopping="auto"` preserves the previous rule: fixed epochs without validation
+data, validation patience with it. Explicit `stopping="validation"` requires
+validation data. Explicit `stopping="fixed"` disables patience but retains
+best-checkpoint selection if validation data is supplied.
+
 With validation data, checks default to every five epochs. The first finite
 post-update check initializes the best checkpoint and patience reference.
 The best checkpoint follows the smallest actual validation loss, with the
 earliest exact tie. The separate patience reference updates only for improvement
 greater than tol * max(1, reference_loss). Three consecutive misses and at
-least ten completed epochs stop fitting; with defaults the earliest stop is
+least ten completed epochs stop fitting when validation patience is active;
+with defaults the earliest stop is
 epoch 20. The initial zero state is diagnostic, not a validation candidate.
 Without validation data, the final finite state is selected at the epoch cap.
+
+The named `termination_criterion_` is `fixed_epochs` or `validation_patience`.
+`criterion_reached_` records its completion, not optimality. `n_iter_` is the
+number of committed optimizer updates, `returned_iteration_` is the selected
+checkpoint update, and `n_epochs_completed_` is processed observations divided
+by fitting-set size (possibly fractional after truncation). `cap_reached_`
+separates epoch/time limits from `fit_usable_`. `cv_eligible_` permits trained
+fixed-epoch fits, but excludes wall-time truncation and untrained fallbacks.
+No objective or optimality test is run: `optimality_checked_`,
+`optimality_met_`, and `converged_` remain false. The last two mean no
+certificate was established, not that divergence was proved. Two-stage
+`stage_diagnostics_` preserves these facts separately for both fits.
 
 No rule claims that finite SGD equals an exact minimizer or that validation
 loss improves monotonically. The default maximum is 200 epochs. Optional time

@@ -28,9 +28,10 @@ def small_data():
 class StatusClassifier(ClassifierMixin, BaseEstimator):
     """Exercise search failure policy without running an optimizer."""
 
-    def __init__(self, fallback_at=0, failure=None):
+    def __init__(self, fallback_at=0, failure=None, cv_eligible=None):
         self.fallback_at = fallback_at
         self.failure = failure
+        self.cv_eligible = cv_eligible
 
     def fit(self, X, y):
         if self.failure == "numerical":
@@ -40,6 +41,8 @@ class StatusClassifier(ClassifierMixin, BaseEstimator):
         self.classes_ = np.unique(y)
         self.model_status_ = ("untrained_fallback" if len(X) >= self.fallback_at
                               else "trained")
+        if self.cv_eligible is not None:
+            self.cv_eligible_ = self.cv_eligible
         return self
 
     def predict(self, X):
@@ -47,6 +50,21 @@ class StatusClassifier(ClassifierMixin, BaseEstimator):
 
 
 class GridTests(unittest.TestCase):
+    def test_explicitly_ineligible_trained_fit_cannot_receive_a_cv_score(self):
+        X, y = small_data()
+        estimator = StatusClassifier(fallback_at=100, cv_eligible=False)
+        with self.assertRaisesRegex(TrainingError, "ineligible for parameter selection"):
+            make_search(estimator, {}, cv=2).fit(X, y)
+
+    def test_epoch_cap_model_is_scoreable_without_optimality_certificate(self):
+        X, y = small_data()
+        search = make_search(LinearSGDDWD(max_epochs=1, stopping="fixed", random_state=1), {}, cv=2)
+        search.fit(X, y)
+        model = search.best_estimator_
+        self.assertTrue(model.cap_reached_ and model.cv_eligible_)
+        self.assertFalse(model.optimality_checked_ or model.converged_)
+        self.assertTrue(np.isfinite(search.best_score_))
+
     def test_default_and_broad_grids_tune_two_stage_penalty_gamma_and_retention(self):
         for broad, count, penalty_exponents, gamma_exponents in [
             (False, 125, [-30, -22, -14, -6, 0], [-8, -6, -4, -2, 0]),

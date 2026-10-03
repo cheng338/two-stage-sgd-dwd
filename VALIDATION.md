@@ -1,4 +1,27 @@
-# Development verification — 0.5.0
+# Development verification — 0.6.0.dev20261003
+
+The October 3, 2026 development branch adds explicit stopping diagnostics and
+adaptive-search qualification. The source suite and a separately installed
+wheel each passed **369 tests and 364 subtests** in `py12_df_aocl` (Python
+3.12.14). Successful acceptance, refusal of unresolved searches, interrupted
+search recovery, and detection of changed selection evidence are covered by
+deterministic regression tests.
+
+[Stopping and search validation](docs/stopping-and-search-validation.md)
+records the additional real-MNIST checks. Nine validation folds matched
+version 0.5.0 exactly on scores, selected observations, update counts, and
+other recorded numerical outputs. Four controlled adaptive searches exercised
+budget limits and repeated refinement. All four correctly remained
+`needs_review`; none established successful qualification on real MNIST.
+The largest completed 480 candidates and ten local refinement rounds but
+still had unresolved tied boundaries. This is a recorded limitation, not a
+completed tuning result or an official-test accuracy estimate.
+
+These small checks used one native thread per process. There was no six-core
+partition or 32 GiB memory cap. The earlier resource settings below describe
+historical verification only.
+
+## Historical verification — 0.5.0
 
 Version 0.5.0 adopts the ensemble package's MNIST lambda and gamma ranges and
 its 10% through 30% retention choices, and provides explicit adaptive exploration.

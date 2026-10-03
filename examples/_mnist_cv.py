@@ -109,7 +109,7 @@ class FoldEvaluator:
         if not (isinstance(self.batch_size, str) and self.batch_size == "full"):
             self.batch_size = _integer(self.batch_size, "batch_size")
         return {"max_epochs": self.max_epochs, "batch_size": self.batch_size,
-                "sampling": "with_replacement"}
+                "sampling": "with_replacement", "stopping": "fixed"}
 
     def _validate_folds(self, folds):
         validated = []
@@ -147,11 +147,26 @@ class FoldEvaluator:
     def _check_complete(self, model, sample_count):
         actual_batch = sample_count if self.batch_size == "full" else min(self.batch_size, sample_count)
         expected_updates = ((sample_count + actual_batch - 1) // actual_batch) * self.max_epochs
-        if (model.model_status_ != "trained" or model.stop_reason_ != "epoch_cap" or
+        if (not model.cv_eligible_ or model.model_status_ != "trained" or model.stop_reason_ != "epoch_cap" or
                 model.n_updates_ != expected_updates or
                 model.n_samples_seen_ != self.max_epochs * sample_count):
             raise TrainingError("CV fitting did not complete its fixed epoch budget",
                                 status="incomplete_cv_fit")
+
+    @staticmethod
+    def _fit_diagnostics(model):
+        """Keep usable budget-limited fits separate from optimality claims."""
+        return {"model_status": model.model_status_, "stop_reason": model.stop_reason_,
+                "termination_criterion": model.termination_criterion_,
+                "criterion_reached": bool(model.criterion_reached_),
+                "cap_reached": bool(model.cap_reached_), "fit_usable": bool(model.fit_usable_),
+                "cv_eligible": bool(model.cv_eligible_),
+                "optimality_checked": bool(model.optimality_checked_),
+                "optimality_met": bool(model.optimality_met_),
+                "converged": bool(model.converged_),
+                "n_epochs_completed": float(model.n_epochs_completed_),
+                "n_updates": int(model.n_updates_),
+                "n_samples_seen": int(model.n_samples_seen_)}
 
     def _linear_stage(self, fold_index, controls):
         cache_key = (self.max_epochs, self.random_state, self.batch_size)
@@ -214,6 +229,8 @@ class FoldEvaluator:
                       "n_train": len(train), "n_validation": len(validation),
                       "accuracy": None, "dwd_loss": None, "eligible": False,
                       "linear_updates": int(cached["model"].n_updates_),
+                      "linear_fit": self._fit_diagnostics(cached["model"]),
+                      "kernel_fit": None,
                       "kernel_updates": 0, "kernel_seconds": 0.0, "score_seconds": 0.0,
                       "linear_seconds_reused": cached["seconds"],
                       "linear_seconds_charged": 0.0 if cache_hit else cached["seconds"],
@@ -240,6 +257,7 @@ class FoldEvaluator:
             self._check_complete(model, len(selected_rows))
             record["kernel_seconds"] = float(model.fit_seconds_)
             record["kernel_updates"] = int(model.n_updates_)
+            record["kernel_fit"] = self._fit_diagnostics(model)
             began_score = perf_counter()
             scores = model.decision_function(self._X[validation])
             predicted = model.classes_[(scores >= 0).astype(int)]

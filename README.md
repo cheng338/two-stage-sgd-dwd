@@ -6,7 +6,7 @@ This package was developed from Chang Cheng's original two-stage SGD-DWD researc
 scripts accompanying his dissertation. It implements the methodology in
 Chapter 3 using stochastic gradient descent (SGD), with optional batch updates
 and kernel choices.
-Version 0.5.0 uses the same single `lambd` convention as `dwd`, with kernel
+Development version 0.6.0.dev20261003 uses the same single `lambd` convention as `dwd`, with kernel
 choices and explicit cross-validation helpers.
 Independent sampling with replacement and batch size one remain the defaults,
 with optional averaged mini-batches and shuffled epochs. It includes its own
@@ -25,7 +25,7 @@ The package includes numerical verification, training-only tuning tools, and
 Exploratory CV scores and checks across SGD seeds do not establish a screening
 advantage or replace replicated evaluation on independent data. The starting
 defaults are inherited choices, not universally optimal settings.
-Publication and licensing have not been decided.
+Licensing has not been decided.
 
 ## Basis and citation
 
@@ -40,7 +40,7 @@ Kernel DWD,"** of:
 When using the package, cite the software version and the dissertation:
 
 > Cheng, Chang (2026). *two-stage-sgd-dwd: Two-Stage DWD via Stochastic
-> Gradient Descent*, version 0.5.0 [Computer software].
+> Gradient Descent*, development version 0.6.0.dev20261003 [Computer software].
 
 Machine-readable citations are provided in [CITATION.cff](CITATION.cff)
 and [BibTeX format](docs/references.bib). Input filenames and checksums are
@@ -197,23 +197,38 @@ equivalence to ordinary complete fits is checked, and fitted state never
 crosses fold boundaries.
 
 The runner evaluates `lambd=1e-6, gamma="scale", retention_fraction=0.3` as a
-separate control, then searches the numeric grid. It allows up to three
-boundary expansions and two geometric-refinement rounds around the best
-three distinct lambd/gamma pairs, with at most 2,000 grid candidates. Two
-complete expansion rounds without improvement stop further expansion.
-Every proposed round covers all five fixed retention fractions; failed or
-previously evaluated candidates are not retried automatically. Earlier
-exploratory runs used an explicit 5% provisional control; their records retain
-that setting. The 30% software default aligns with the ensemble package and
-does not promote an empirical winner.
+separate control, then searches the numeric grid. Its defaults match the
+ensemble adaptive workflow: at most **three expansion rounds** and **500
+candidates**, excluding the control. Lambda and gamma are refined around the
+best three distinct pairs until the selected winner has valid conditional
+neighbors within a factor of two on both sides and **two completed local
+rounds are stable**. Retention is compared at the fixed supplied grid values.
 
-Saved folds, settings, candidate records, and selection diagnostics make the
-exploration inspectable and resumable with `--resume`. Boundary winners,
-budget limits, and plateaus remain explicit. A CV winner or plateau at a fixed
-epoch budget does not establish an optimal default or optimizer convergence;
-larger-budget and independent-seed checks remain part of assessing a candidate.
-The [recorded MNIST exploration](docs/mnist-exploration.md) includes these
-checks, a larger training sample, and an explicit focused follow-up grid.
+Neighbors must be evaluated at the same values of every other parameter.
+Invalid fits cannot establish a bracket, and missing conditional combinations
+are filled before further expansion. Tied boundary winners are checked too;
+a remote tied edge can be waived only by recorded, repeated valid same-slice
+outward evidence. The selected winner always needs its own bilateral bracket.
+
+A complete proposed stage must fit the remaining budget. Unresolved bounds,
+invalid support, or exhausted budgets produce `state="needs_review"`, with
+provisional settings and reasons. Successful searches produce `state="accepted"`
+and `qualified-selection.json`. The example's `load_qualified_selection`
+checks the saved evidence before exporting those locked settings. Neither
+state automatically starts a final fit or accesses held-out data.
+
+`--refinement-rounds` is an optional safety cap, not a success condition; its
+default is unlimited within the candidate budget. Saved folds, settings,
+implementation snapshots, candidate records, and policy state support
+`--resume` only with matching settings and data. This version does not resume
+older example checkpoints. Ordinary `make_search` remains fixed-grid CV and
+does not apply this adaptive review gate.
+
+Search acceptance is a finite empirical stopping decision. It does not
+establish solver convergence, a global optimum, or final test accuracy.
+Larger-budget and independent-seed checks remain useful when assessing SGD
+settings. The [earlier MNIST exploration](docs/mnist-exploration.md) remains
+historical evidence for version 0.5.0; it is not a validation of this branch.
 
 See [statistical rationale and kernel details](docs/kernels-and-tuning.md)
 and the [small runnable search example](examples/kernel_search_example.py).
@@ -287,6 +302,33 @@ failure, not an invitation to add observations or change the model. A
 `SelectionError` preserves `linear_estimator_`, `selected_indices_`,
 `selected_ids_`, and class-count diagnostics; the two-stage predictor remains
 unfitted. The selected linear model remains available as a baseline.
+
+## Fitting budgets and stopping
+
+`max_epochs=200` remains the default for each stage. One SGD epoch processes
+that stage's observations; it is not equivalent to one MM solver iteration.
+The schedule, gradients, regularization, and sampling defaults are unchanged.
+
+`stopping="auto"` preserves prior behavior: fixed epochs without monitoring
+data, or validation-loss patience with explicit `validation_data`.
+`stopping="fixed"` disables patience, and `stopping="validation"` requires
+monitoring data. When monitoring data is supplied, the best validation
+checkpoint is selected even in fixed mode. Keep that monitoring set inside
+training data; it must not be the final test set or the CV scoring fold.
+
+`termination_criterion_` names the chosen stopping rule, and
+`criterion_reached_` says whether that rule was met. Completing a fixed epoch
+budget is a budget-completion criterion. Validation patience is a predictive
+monitoring criterion. Neither is an optimality test: `optimality_checked_`
+remains false, and `converged_`/`optimality_met_` are false because no certificate
+was established.
+
+`cap_reached_`, `fit_usable_`, and `cv_eligible_` distinguish these facts.
+Finite trained fits completing an epoch cap can receive CV scores without an
+automatic budget increase. Wall-time-truncated fits and untrained fallbacks
+are excluded by the search helpers. `n_iter_` counts SGD updates;
+`n_epochs_completed_` records processed passes. Two-stage models expose both
+components through `stage_diagnostics_`.
 
 ## Reproducibility and diagnostics
 
