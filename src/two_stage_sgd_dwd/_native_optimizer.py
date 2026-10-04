@@ -12,7 +12,9 @@ import time
 
 import numpy as np
 
-from ._kernels import _TRUSTED
+from . import _core
+from ._kernels import KernelSpec, _TRUSTED
+from ._training_kernels import make_rbf_column_loader
 
 
 def resolve_backend(kind, X, validation, est, deadline, callback):
@@ -66,6 +68,28 @@ def _replacement_indices(rng, m):
     return np.asarray([int(rng.integers(m)) for _ in range(m)], dtype=np.int64)
 
 
+def _prevalidated_rbf_loader(X, rng, est, helpers):
+    # Capturing fitting state once is restricted to ordinary built-in objects.
+    # Subclasses and hooks retain the original per-request evaluation path.
+    if (type(est) is not helpers.KernelSGDDWD
+            or type(X) is not np.ndarray or X.dtype != np.float64
+            or not X.flags.c_contiguous or not X.flags.aligned
+            or type(rng) is not np.random.Generator
+            or type(rng.bit_generator) not in (
+                np.random.PCG64, np.random.PCG64DXSM, np.random.Philox,
+                np.random.SFC64, np.random.MT19937)
+            or helpers._kernel_values is not helpers._ORIGINAL_KERNEL_VALUES
+            or helpers.rbf_kernel is not helpers._ORIGINAL_RBF_KERNEL
+            or _core.rbf_kernel is not helpers._ORIGINAL_RBF_KERNEL):
+        return None
+    spec, gamma = est._kernel_spec_, est.gamma_
+    if (type(spec) is not KernelSpec or type(spec.kernel) is not str
+            or spec.kernel != "rbf" or type(gamma) is not float
+            or not np.isfinite(gamma) or gamma <= 0):
+        return None
+    return make_rbf_column_loader(X, gamma)
+
+
 def optimize(kind, X, y, rng, est, native, column_cache=None):
     """Optimize supported fixed-epoch fits; preserve Python's committed prefix."""
     # Runtime import avoids a module cycle and retains the estimator's shared
@@ -85,9 +109,21 @@ def optimize(kind, X, y, rng, est, native, column_cache=None):
         raise helpers.NumericalFailure("The learning-rate bound is nonfinite")
     initial = helpers._snapshot(coefficients, intercept, 0, rng)
     kernel_counter = [0]
+    column_loader = (_prevalidated_rbf_loader(X, rng, est, helpers)
+                     if kind == "kernel" else None)
     if kind == "linear":
         rows = tuple(X[i] for i in range(m))
         get_row = rows.__getitem__
+    elif column_loader is not None:
+        def get_row(i):
+            if column_cache is None:
+                values = column_loader(i)
+                kernel_counter[0] += m
+                return values
+            values, hit = column_cache.get(i, lambda: column_loader(i))
+            if not hit:
+                kernel_counter[0] += m
+            return values
     else:
         def get_row(i):
             if column_cache is None:

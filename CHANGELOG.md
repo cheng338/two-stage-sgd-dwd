@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Validate fixed positive-RBF fitting inputs once for ordinary native kernel
+  fits. Compute fresh training columns lazily with the same SciPy squared
+  distances, arithmetic, and finite-result checks; retain the original path
+  for custom state and hooks. Preserve cache accounting and SGD updates.
+
 - Avoid a duplicate native linear coefficient scan when an ordinary NumPy
   proposal has already passed finite-value checks and needs no projection.
   Retain the final scan for projected updates, kernel updates, and custom arrays.

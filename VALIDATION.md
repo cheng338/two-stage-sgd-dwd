@@ -1,3 +1,51 @@
+# Development verification — native RBF input validation
+
+On October 4, 2026, guarded RBF column preparation passed **569 tests and
+7,558 subtests** with the native extension and **523 tests and 4,662 subtests**
+in a separate portable source copy, with 46 native-dependent skips. Each full
+suite produced only the existing warning from an invalid-label fixture.
+The focused checks passed 14 tests and 78 subtests without warnings.
+
+For eligible native RBF fits, fixed training inputs and kernel width are
+validated once. Each cache miss still computes a fresh column using the same
+squared-distance orientation and exponential operations, including finite
+distance and result checks. Columns remain lazy and independently stored.
+Custom estimators, generators, array layouts and replaced kernel hooks retain
+the previous path. The objective, sampling, learning rates, sequential
+updates, cache policy and compiled binary are unchanged. No new dependency
+or public tuning parameter is introduced.
+
+A complete-fit benchmark used digit pairs 2–3, 4–9 and 3–8, with saved training
+draws 00, 04 and 09 for each pair. Each draw was timed twice in alternating
+implementation order: six paired timings per pair, not six independent
+training draws. Timings included StandardScaler and both stages at 800 epochs,
+30% retention and a 64 MiB lazy-cache payload limit, using py12_df_aocl,
+NumPy 2.5.2 and one native thread. Means and sample SDs combine the three
+saved draws and their two timing repetitions.
+
+| Pair | Previous fit, s (mean ± SD) | Prevalidated RBF fit, s (mean ± SD) | Time saved |
+| --- | ---: | ---: | ---: |
+| 2–3 | 4.372 ± 0.026 | 4.332 ± 0.073 | 0.9% |
+| 4–9 | 4.236 ± 0.046 | 4.160 ± 0.046 | 1.8% |
+| 3–8 | 4.338 ± 0.062 | 4.260 ± 0.079 | 1.8% |
+
+Separate short kernel-stage checks used the standardized retained subset of
+draw 00, with six paired timings per pair and cache regime. A cold full cache
+used one epoch; evicting, disabled and subcolumn-budget caches used five.
+Across digit pairs, evicting and disabled caches saved 20.5–20.9% of mean fit
+time; the cold full cache saved 20.3–20.6%, and subcolumn budgets saved
+20.7–20.9%. All 72 short kernel-stage pairs were faster. These timings measure
+cache misses over short runs and do not imply a comparable saving in the
+800-epoch complete fits.
+
+All 90 paired checks matched exactly for non-timing model state, coefficients,
+RNG states, selections, cache/evaluation counters, scores and predicted labels.
+All nine complete-fit configurations reproduced their original study score
+hashes. Checks also covered failed-column recovery, hook fallbacks and input
+immutability. No test labels were loaded and no statistical settings were
+retuned. The gains describe the tested workloads; historical study outputs
+are unchanged. See [optimizer details](docs/optimizer-backends.md).
+
 # Development verification — native linear coefficient validation
 
 On October 4, 2026, guarded removal of a redundant native linear coefficient

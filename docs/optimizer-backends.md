@@ -111,6 +111,19 @@ thread, and hardware changes require their own verification. Time-limited
 Python fits can stop at different updates when caching changes execution time.
 Such stopped fits are not an equality comparison at a common update budget.
 
+For ordinary native positive-width RBF fits, fitting features and bandwidth are
+validated once before the update loop. Each requested column still uses the
+same `cdist(X, X[i:i+1], metric="sqeuclidean")`, multiplication, in-place
+exponential, and finite-result checks. Columns remain fresh and lazy; cache
+lookups, evictions, and evaluation counters keep their existing behavior.
+This path requires the standard kernel estimator, ordinary contiguous aligned
+float64 arrays, an exact built-in NumPy generator and bit generator, the plain
+resolved RBF specification, and unchanged kernel helper functions. Subclasses,
+custom generators, other kernel settings, and replaced kernel helpers retain
+per-request validation. Fitting inputs must remain unchanged during the fit;
+concurrent external mutation is not supported. Python fitting, validation,
+and prediction keep their existing paths.
+
 Measure complete cold fits before making speed claims. Include scaling and
 screening where used, kernel preparation, lazy cache filling, native setup,
 fitted-array publication, and prediction according to the declared comparison.

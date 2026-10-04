@@ -78,6 +78,10 @@ def _kernel_values(X, Y, gamma, spec=None):
     return spec.evaluate(X, Y)
 
 
+_ORIGINAL_KERNEL_VALUES = _kernel_values
+_ORIGINAL_RBF_KERNEL = rbf_kernel
+
+
 def _set_kernel(est, X):
     est._kernel_input_kws_ = copy.deepcopy(est.kernel_kws)
     spec = resolve_kernel(X, est.kernel, est.gamma, est._kernel_input_kws_)
