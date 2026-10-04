@@ -29,7 +29,20 @@ remain available through Python; `"auto"` records the fallback.
 
 The native loop uses NumPy's dot product and the scalar update operation order.
 It prepares at most one epoch of observation indices and learning rates at a
-time, using the same scalar replacement draws or epoch permutation as Python.
+time. On NumPy 2.5.2, an exact built-in `Generator` using `PCG64`, `PCG64DXSM`,
+`Philox`, `SFC64`, or `MT19937` prepares replacement indices with one array
+draw. Scalar and array draws use the same bounded-integer routine in this
+version; regression checks compare both the indices and complete RNG state.
+Other NumPy versions, generator subclasses, and custom bit generators retain
+scalar draws. Shuffle sampling retains its original epoch permutation.
+Preparing an array of indices does not batch the gradients: every update
+still uses one observation and its original learning rate.
+
+NumPy does not promise scalar/array stream equivalence across all builds and
+versions. The version guard is deliberately narrow; adding another version
+requires checking its implementation and exact stream/state parity. See
+[NumPy's compatibility policy](https://numpy.org/doc/stable/reference/random/compatibility.html).
+
 It does not prepare a kernel Gram matrix. A failed numerical update retains
 the diagnostic state from the preceding committed update and the RNG position
 after the attempted draw. The fit remains invalid. Structural errors propagate;

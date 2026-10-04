@@ -1,3 +1,47 @@
+# Development verification — native replacement-index preparation
+
+On October 4, 2026, guarded native index preparation passed **547 tests and
+7,413 subtests** with the released native extension and **516 tests and 4,639
+subtests** in a separate portable source copy, with 31 native-dependent skips.
+Each suite produced only the existing warning from an invalid-label fixture.
+Checks compare complete RNG states, continuation draws, generated indices,
+scalar fallbacks, shuffle sampling, coefficients, selected observations,
+cache diagnostics, external RNG immutability, and failed-update recovery.
+
+On NumPy 2.5.2, exact built-in Generator instances with PCG64, PCG64DXSM,
+Philox, SFC64 or MT19937 prepare one epoch of replacement indices with one
+array draw. Each coefficient update still processes one observation with its
+original learning rate. Other NumPy versions and custom generators retain
+scalar draws. No new dependency, tuning parameter, or compiled binary is
+required. The Python optimizer remains the default.
+
+A complete-fit benchmark used digit pairs 2–3, 4–9 and 3–8, with saved training
+draws 00, 04 and 09 for each pair. Each draw was timed twice in alternating
+implementation order: six paired timings per pair, not six independent
+training draws. Timings included StandardScaler and both stages at 800 epochs,
+30% retention and a 64 MiB lazy-cache payload limit, using py12_df_aocl,
+NumPy 2.5.2 and one native thread. Means and sample SDs combine the three
+saved draws and their two timing repetitions.
+
+| Pair | Previous fit, s (mean ± SD) | Guarded array draws, s (mean ± SD) | Time saved |
+| --- | ---: | ---: | ---: |
+| 2–3 | 7.641 ± 0.292 | 4.928 ± 0.269 | 35.5% |
+| 4–9 | 7.479 ± 0.342 | 4.748 ± 0.305 | 36.5% |
+| 3–8 | 7.646 ± 0.249 | 4.955 ± 0.413 | 35.2% |
+
+The candidate was faster in all 18 complete-fit pairs. All nine saved model
+configurations reproduced their original study score hashes; coefficients,
+RNG states, selections, predictions and cache/evaluation counters matched
+exactly. Tests with cold, evicting, disabled and insufficient caches showed
+no material regression; the largest control mean slowdown was 0.65%.
+No test labels were read and no statistical settings were retuned.
+
+These results describe the tested workloads and runtime. NumPy does not
+generally promise scalar/array stream equivalence across versions and builds;
+the fast path therefore uses a narrow version/type guard. Other versions
+receive scalar fallback and should not expect this speedup. Historical study
+outputs are unchanged. See [optimizer details](docs/optimizer-backends.md).
+
 # Development verification — optional BLAS RBF prediction
 
 On October 4, 2026, the optional prediction backend passed **534 tests and

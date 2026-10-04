@@ -53,6 +53,19 @@ def resolve_backend(kind, X, validation, est, deadline, callback):
     return module
 
 
+def _replacement_indices(rng, m):
+    # NumPy 2.5.2 uses the same bounded-int64 fill loop for scalar and array
+    # draws. Limit this optimization to the validated built-in implementations;
+    # other versions and subclasses retain the original scalar call sequence.
+    if (np.__version__ == "2.5.2"
+            and type(rng) is np.random.Generator
+            and type(rng.bit_generator) in (
+                np.random.PCG64, np.random.PCG64DXSM, np.random.Philox,
+                np.random.SFC64, np.random.MT19937)):
+        return rng.integers(m, size=m, dtype=np.int64)
+    return np.asarray([int(rng.integers(m)) for _ in range(m)], dtype=np.int64)
+
+
 def optimize(kind, X, y, rng, est, native, column_cache=None):
     """Optimize supported fixed-epoch fits; preserve Python's committed prefix."""
     # Runtime import avoids a module cycle and retains the estimator's shared
@@ -96,9 +109,7 @@ def optimize(kind, X, y, rng, est, native, column_cache=None):
             if est.sampling == "shuffle":
                 indices = np.asarray(rng.permutation(m), dtype=np.int64)
             else:
-                # A vectorized draw is not assumed to preserve the original
-                # scalar RNG stream for every NumPy generator implementation.
-                indices = np.asarray([int(rng.integers(m)) for _ in range(m)], dtype=np.int64)
+                indices = _replacement_indices(rng, m)
             rates = np.asarray([(1.0 / B) * (1.0 + (updates + j) / m) ** (-0.75)
                                 for j in range(m)], dtype=np.float64)
             coefficients, intercept, completed, error = native.run_steps(

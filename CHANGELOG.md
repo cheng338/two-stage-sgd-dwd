@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Prepare replacement-sampling indices with one NumPy call per native epoch
+  on the verified NumPy 2.5.2 built-in generators. Keep scalar draws for
+  other versions and custom generators. Preserve single-observation updates,
+  learning rates, epoch budgets, and failed-update RNG restoration.
+
 - Add optional `prediction_backend="blas"` for guarded matrix-product RBF
   prediction in the kernel and two-stage estimators. Retain `"direct"` as the
   default, including predictions from older saved models. Preserve training,
