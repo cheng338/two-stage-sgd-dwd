@@ -1,3 +1,54 @@
+# Development verification — native linear coefficient validation
+
+On October 4, 2026, guarded removal of a redundant native linear coefficient
+scan passed **555 tests and 7,480 subtests** with the rebuilt extension. The
+same source tests also passed with the original released extension. A separate
+portable source copy passed **516 tests and 4,639 subtests**, with 39
+native-dependent skips. Each suite produced only the existing warning from
+an invalid-label fixture.
+
+The proposal loop already checks each new coefficient for finiteness. When
+ordinary NumPy scratch arrays need no projection division, the native solver
+avoids checking that unchanged proposal a second time. Projected linear
+updates, kernel updates and custom array types retain the final scan. Tests
+cover projection boundaries, overflow, subnormal values, custom-array mutation,
+committed failure prefixes, complete fitted states and RNG states. Update
+arithmetic, projection, sampling, learning rates and public defaults are
+unchanged. This improvement requires the rebuilt native extension; older
+extensions and the Python backend retain their existing execution paths.
+
+Complete-fit timings used digit pairs 2–3, 4–9 and 3–8 and saved training draws
+00, 04 and 09 per pair, each timed twice in alternating implementation order.
+These are six paired timings per pair, not six independent training draws.
+Each fresh fit included StandardScaler and both native stages at 800 epochs,
+30% retention and a 64 MiB lazy-cache payload limit. The environment was
+py12_df_aocl with NumPy 2.5.2 and one native thread. Means and sample SDs
+combine the three training draws and their two timing repetitions.
+
+| Pair | Previous fit, s (mean ± SD) | Guarded scan removal, s (mean ± SD) | Time saved |
+| --- | ---: | ---: | ---: |
+| 2–3 | 4.647 ± 0.049 | 4.250 ± 0.021 | 8.5% |
+| 4–9 | 4.542 ± 0.060 | 4.151 ± 0.042 | 8.6% |
+| 3–8 | 4.592 ± 0.042 | 4.232 ± 0.047 | 7.8% |
+
+All 18 complete-fit comparisons were faster. Every measured pair matched
+non-timing fitted states, coefficients, RNG states, selected observations,
+cache/evaluation counters, scores and predicted labels exactly. All nine
+complete-model configurations reproduced their original saved study score
+hashes. No test labels were read and no statistical settings were retuned.
+
+Separate native linear-update controls used 200,000 updates and 784 features,
+with six alternating paired timings for each fixture. The unprojected fixture
+saved 11.6% of update-block time. Mean changes in the two projection fixtures
+were slowdowns of 0.28% and 0.31%. These control timings exclude preprocessing,
+sampling preparation, kernel fitting and prediction; they are not complete
+fit timings. All control results and inputs matched exactly.
+
+These results apply to the tested workloads and runtime. They do not certify
+every compiler or numerical platform. The optimization assumes normal NumPy
+operations and preserves the existing checks for array subclasses. Historical
+study outputs are unchanged. See [optimizer details](docs/optimizer-backends.md).
+
 # Development verification — native replacement-index preparation
 
 On October 4, 2026, guarded native index preparation passed **547 tests and

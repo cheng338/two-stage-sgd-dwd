@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Avoid a duplicate native linear coefficient scan when an ordinary NumPy
+  proposal has already passed finite-value checks and needs no projection.
+  Retain the final scan for projected updates, kernel updates, and custom arrays.
+
 - Prepare replacement-sampling indices with one NumPy call per native epoch
   on the verified NumPy 2.5.2 built-in generators. Keep scalar draws for
   other versions and custom generators. Preserve single-observation updates,

@@ -91,6 +91,12 @@ retain their separate meanings.
 
 ## Availability and timing
 
+The native linear loop checks every proposed coefficient while constructing
+the proposal. For ordinary NumPy arrays that need no projection, it avoids
+scanning that unchanged proposal a second time. Projected linear updates,
+kernel updates, and custom array types retain the final scan. This changes
+neither the update arithmetic nor the sampling and learning-rate choices.
+
 The compiled extension is optional; portable Python-only distributions retain
 all estimator functionality. Native wheels are platform and architecture
 specific. Source builds require a compatible C compiler for the extension;

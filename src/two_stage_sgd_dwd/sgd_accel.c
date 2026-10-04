@@ -6,7 +6,7 @@
 
 /* Keep NumPy's dot implementation and strict, separate scalar operations. */
 typedef struct {
-    PyObject *dot_function, *copy_function, *empty_function;
+    PyObject *dot_function, *copy_function, *empty_function, *ndarray_type;
 } Functions;
 
 static int vector_buffer(PyObject *object, Py_buffer *view, int integer, int writable) {
@@ -63,6 +63,8 @@ static PyObject *run_steps(PyObject *self, PyObject *args) {
     if (proposal == NULL || !vector_buffer(current, &a, 0, 1) || !vector_buffer(proposal, &z, 0, 1) ||
             !vector_buffer(labels, &y, 0, 0) || !vector_buffer(indices, &ix, 1, 0) ||
             !vector_buffer(rates, &eta, 0, 0)) goto cleanup;
+    int ordinary_arrays = (Py_TYPE(current) == (PyTypeObject *)functions->ndarray_type &&
+                           Py_TYPE(proposal) == (PyTypeObject *)functions->ndarray_type);
     Py_ssize_t width = a.len / 8, count = ix.len / 8, n = y.len / 8;
     if (eta.len != ix.len || z.len != a.len || width == 0 || (kind == 1 && width != n)) {
         PyErr_SetString(PyExc_ValueError, "Mismatched scalar solver dimensions");
@@ -101,6 +103,7 @@ static PyObject *run_steps(PyObject *self, PyObject *args) {
         new_bias = bias - multiplier;
         if (!isfinite(new_bias) || !isfinite(multiplier)) { error = PyUnicode_FromString("Nonfinite scalar update"); goto numerical_end; }
         double *old = (double *)a.buf, *next = (double *)z.buf, *features = (double *)x.buf;
+        int check_final_coefficients = 1;
         if (kind == 1) {
             shrink = 1.0 - steps[t] * (2.0 * regularization);
             if (!isfinite(shrink)) { error = PyUnicode_FromString("Nonfinite shrinkage"); goto numerical_end; }
@@ -122,9 +125,14 @@ static PyObject *run_steps(PyObject *self, PyObject *args) {
                 goto cleanup;
             }
             double norm = sqrt(squared_norm);
-            if (scale > 1.0 || norm > 1.0) for (Py_ssize_t j = 0; j < width; j++) next[j] /= norm;
+            if (scale > 1.0 || norm > 1.0) {
+                for (Py_ssize_t j = 0; j < width; j++) next[j] /= norm;
+            } else if (ordinary_arrays) {
+                /* Plain-array dot cannot mutate the checked, undivided proposal. */
+                check_final_coefficients = 0;
+            }
         }
-        for (Py_ssize_t j = 0; j < width; j++) if (!isfinite(next[j])) {
+        if (check_final_coefficients) for (Py_ssize_t j = 0; j < width; j++) if (!isfinite(next[j])) {
             error = PyUnicode_FromString("Nonfinite coefficients"); goto numerical_end;
         }
         bias = new_bias;
@@ -157,11 +165,13 @@ static PyMethodDef methods[] = {
 static int module_traverse(PyObject *module, visitproc visit, void *arg) {
     Functions *state = (Functions *)PyModule_GetState(module);
     Py_VISIT(state->dot_function); Py_VISIT(state->copy_function); Py_VISIT(state->empty_function);
+    Py_VISIT(state->ndarray_type);
     return 0;
 }
 static int module_clear(PyObject *module) {
     Functions *state = (Functions *)PyModule_GetState(module);
     Py_CLEAR(state->dot_function); Py_CLEAR(state->copy_function); Py_CLEAR(state->empty_function);
+    Py_CLEAR(state->ndarray_type);
     return 0;
 }
 static void module_free(void *module) { (void)module_clear((PyObject *)module); }
@@ -178,8 +188,9 @@ PyMODINIT_FUNC PyInit__sgd_accel(void) {
     state->dot_function = PyObject_GetAttrString(numpy, "dot");
     state->copy_function = PyObject_GetAttrString(numpy, "copy");
     state->empty_function = PyObject_GetAttrString(numpy, "empty_like");
+    state->ndarray_type = PyObject_GetAttrString(numpy, "ndarray");
     Py_DECREF(numpy);
-    if (!state->dot_function || !state->copy_function || !state->empty_function) {
+    if (!state->dot_function || !state->copy_function || !state->empty_function || !state->ndarray_type) {
         Py_DECREF(created); return NULL;
     }
     return created;
