@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased - 0.7.0.dev20261003
+## 0.7.0 - native SGD and lazy kernel reuse, 2026-10-04
 
 - Add optional fit-local lazy training kernel-column reuse with a byte-bounded
   LRU cache. Keep caching disabled by default, preserve single-observation
@@ -11,7 +11,7 @@
   Support fixed-epoch, single-observation fits without validation, callbacks,
   or wall-time limits. Keep portable Python-only builds available.
 
-## Unreleased development baseline - 0.6.0.dev20261003
+### Stopping and tuning updates included from the 0.6.0 development baseline
 
 - Add explicit fixed-epoch and validation-patience stopping controls, with
   separate cap, model usability, CV eligibility, and optimality diagnostics.

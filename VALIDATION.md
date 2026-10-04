@@ -1,4 +1,21 @@
-# Development verification — 0.7.0.dev20261003
+# Release verification — 0.7.0
+
+On October 4, 2026, separately installed release wheels passed the complete
+correctness suite. The Windows native wheel passed **405 tests and 5,531
+subtests**. The portable wheel passed **387 tests and 2,891 subtests**, with
+18 native-only tests skipped because that wheel does not include the extension.
+Both checks used Python 3.12.14 in `py12_df_aocl`, one native thread, and
+verified installed import paths before and after the tests. Each suite
+produced one expected warning from a deliberately invalid-label fixture.
+No correctness-test failures occurred.
+
+The native and portable wheels and source distribution are rebuilt from the
+release source, including its current documentation. Promotion from the
+integrated development branch changes version and publication metadata;
+the estimator algorithms and defaults remain unchanged. The earlier checks
+below retain their original version and artifact scope.
+
+## Development verification — 0.7.0.dev20261003
 
 The installed-wheel checks used artifacts built from feature commit
 `85f90d9`. The separately installed native Windows wheel passed **405 tests and
