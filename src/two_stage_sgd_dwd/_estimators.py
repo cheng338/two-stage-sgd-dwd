@@ -14,6 +14,7 @@ from ._core import (dwd_loss, kernel_batch_step, kernel_step, linear_batch_step,
                     linear_step, rbf_kernel, select_near_boundary)
 from ._cache import LazyKernelColumnCache
 from ._kernels import _TRUSTED, resolve_kernel
+from ._prediction import rbf_prediction_scores
 
 
 class TrainingError(RuntimeError):
@@ -641,6 +642,10 @@ class KernelSGDDWD(_BaseDWD):
     def decision_function(self, X):
         check_is_fitted(self)
         X = validate_data(self, X, reset=False, dtype=np.float64, accept_sparse=False)
+        if self._kernel_spec_.kernel == "rbf" and self.gamma_ > 0:
+            return rbf_prediction_scores(X, self.basis_, self.dual_coef_[0],
+                                         self.intercept_[0], self.gamma_,
+                                         self.prediction_batch_size)
         return _scores("kernel", X, self.dual_coef_[0], self.intercept_[0],
                        self.basis_, self.gamma_, self.prediction_batch_size,
                        kernel_spec=self._kernel_spec_)

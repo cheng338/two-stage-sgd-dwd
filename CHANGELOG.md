@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Reuse one bounded RBF prediction buffer and validate the fitted basis and
+  bandwidth once per prediction call. Preserve direct squared-distance
+  arithmetic, finite-result checks, fitted state, and all training paths.
+  Reduce temporary prediction allocations; no substantial speedup is claimed.
+
 ## 0.7.0 - native SGD and lazy kernel reuse, 2026-10-04
 
 - Add optional fit-local lazy training kernel-column reuse with a byte-bounded

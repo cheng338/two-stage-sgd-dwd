@@ -1,3 +1,26 @@
+# Development verification — prediction buffer reuse
+
+On October 4, 2026, the prediction-only update passed **417 tests and 5,599
+subtests** with the native extension and **399 tests and 2,959 subtests** in
+the portable configuration, with 18 native-only skips. Checks cover direct
+distance arithmetic, large common offsets, noncontiguous and read-only inputs,
+invalid fitted state, overflow, serialization, and bounded buffer reuse.
+The training and validation-checkpoint evaluation paths are unchanged.
+
+A paired comparison reproduced 30 fixed-30% MNIST models from the three digit
+pairs and ten saved training draws per pair. The original decision scores
+matched their saved study hashes. The revised prediction path then matched
+training and test scores bitwise and preserved all class labels. Six paired,
+alternating-order prediction timings per model used Python 3.12.14 in
+`py12_df_aocl` with one native thread, including feature scaling.
+
+Peak traced temporary allocations decreased by approximately 9% with the
+default prediction block size of 256 rows and 22–23% with the study setting
+of 1024 rows. These are Python/NumPy allocation peaks, not total process memory.
+Mean prediction-time differences were below 1%; this check establishes no
+substantial prediction speedup. Training settings and the recorded study
+results were not changed.
+
 # Release verification — 0.7.0
 
 On October 4, 2026, separately installed release wheels passed the complete
