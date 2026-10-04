@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add optional `prediction_backend="blas"` for guarded matrix-product RBF
+  prediction in the kernel and two-stage estimators. Retain `"direct"` as the
+  default, including predictions from older saved models. Preserve training,
+  checkpoint calculations, and existing non-RBF prediction paths.
+- Recompute suspicious distances and uncertain score signs directly. Document
+  floating-point score differences, bounded prediction buffers, and measured
+  prediction performance separately from training performance.
+
 - Expose optional optimizer-backend and lazy kernel-cache controls in the
   MNIST tuning example while preserving fold-local first-stage reuse and
   the Python/zero-cache defaults. Record actual backends and cache usage.

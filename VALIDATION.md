@@ -1,3 +1,46 @@
+# Development verification — optional BLAS RBF prediction
+
+On October 4, 2026, the optional prediction backend passed **534 tests and
+5,599 subtests** with the released native extension and **509 tests and 2,959
+subtests** in a separate portable source copy, with 25 native-dependent skips.
+Each suite produced the existing warning from a deliberately invalid-label
+fixture; neither had a failure. Checks cover direct defaults, old saved models,
+postfit switching, unchanged training/checkpoint paths, large offsets, nearly
+equal rows, extreme widths and coefficients, subnormal values, overflow,
+near-zero decisions, array layouts, serialization, and bounded local buffers.
+
+A paired prediction benchmark reproduced 30 fixed-30% MNIST models: ten saved
+training draws for each of digit pairs 2–3, 4–9, and 3–8. Each direct model
+matched its saved study score hash. Identical fitted state was transferred to
+the optional BLAS path without retraining or tuning. All training and test
+labels stayed unchanged at prediction block sizes 256 and 1024. The largest
+absolute score difference was approximately **4e-14**, within the tolerance
+declared before timing: absolute 1e-10 plus relative 1e-11. Input arrays and
+serialized fitted state stayed unchanged.
+
+Six paired, alternating-order timings per model included StandardScaler and
+prediction, using `py12_df_aocl` with one native thread. At the default block
+size of 256, means across ten model-level timing means were:
+
+| Pair | Direct prediction, ms (mean ± SD) | BLAS prediction, ms (mean ± SD) | Speedup |
+| --- | ---: | ---: | ---: |
+| 2–3 | 244.795 ± 3.568 | 30.948 ± 0.720 | 7.91× |
+| 4–9 | 233.663 ± 3.442 | 29.736 ± 0.862 | 7.86× |
+| 3–8 | 236.359 ± 5.073 | 29.862 ± 1.361 | 7.92× |
+
+At block size 1024, speedups were 7.58–7.84×. Peak traced temporary allocations
+increased by about 0.03 MiB at block size 256 and 0.04–0.08 MiB at block size
+1024; these allocation measurements are not total process memory. Untimed
+test-query diagnostics recorded no direct-distance fallbacks on these models.
+Separate adversarial tests exercise the fallback paths.
+
+Direct prediction remains the default. The opt-in backend changes floating-point
+reduction order; its safeguards and observed label agreement are not universal
+equivalence certificates across inputs or BLAS builds. Training and its update
+rules are unchanged. Explicit postfit objective evaluation can reflect the
+chosen prediction backend's score rounding. The recorded study results remain
+unchanged; this benchmark establishes prediction performance in this environment.
+
 # Development verification — accelerated MNIST tuning example
 
 On October 4, 2026, the optional tuning controls passed **462 tests and 5,599

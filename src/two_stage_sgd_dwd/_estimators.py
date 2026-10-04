@@ -14,7 +14,7 @@ from ._core import (dwd_loss, kernel_batch_step, kernel_step, linear_batch_step,
                     linear_step, rbf_kernel, select_near_boundary)
 from ._cache import LazyKernelColumnCache
 from ._kernels import _TRUSTED, resolve_kernel
-from ._prediction import rbf_prediction_scores
+from ._prediction import rbf_prediction_scores, rbf_prediction_scores_blas
 
 
 class TrainingError(RuntimeError):
@@ -110,6 +110,14 @@ def _controls(est):
 _CACHE_DIAGNOSTICS = ("kernel_cache_hits_", "kernel_cache_misses_",
                       "kernel_cache_evictions_", "kernel_cache_peak_bytes_",
                       "kernel_cache_capacity_columns_")
+
+
+def _prediction_backend(est):
+    # Models serialized before this option existed retain direct prediction.
+    backend = getattr(est, "prediction_backend", "direct")
+    if not isinstance(backend, str) or backend not in ("direct", "blas"):
+        raise ValueError("prediction_backend must be 'direct' or 'blas'")
+    return backend
 
 
 def _cache_controls(est):
@@ -456,6 +464,7 @@ class _BaseDWD(ClassifierMixin, BaseEstimator):
         if kind == "kernel":
             _penalty(self)
             _integer(self.prediction_batch_size, "prediction_batch_size")
+            _prediction_backend(self)
             _cache_controls(self)
         if callback is not None and not callable(callback):
             raise ValueError("checkpoint_callback must be callable or None")
@@ -611,13 +620,17 @@ class KernelSGDDWD(_BaseDWD):
     updates are unchanged; wall-time-limited fits may reach a different update.
     optimizer_backend follows LinearSGDDWD. The native path additionally
     requires an analytic built-in kernel; automatic fallback is reported.
+    prediction_backend='direct' preserves direct-distance RBF scoring. 'blas'
+    opts into guarded matrix-product RBF prediction; floating-point scores can
+    differ. Other kernels and zero-width RBF retain their original paths.
+    This option affects prediction, not fitting or validation checkpoints.
     """
     def __init__(self, *, lambd=1e-6, kernel="rbf", gamma="scale",
                  kernel_kws=None, batch_size=1,
                  sampling="with_replacement", max_epochs=200,
                  validation_interval=5, patience=3, min_epochs=10, tol=1e-4,
                  stopping="auto", random_state=None, max_seconds=None, prediction_batch_size=256,
-                 kernel_cache_bytes=0, optimizer_backend="python"):
+                 prediction_backend="direct", kernel_cache_bytes=0, optimizer_backend="python"):
         self.lambd = lambd
         self.kernel = kernel
         self.gamma = gamma
@@ -633,6 +646,7 @@ class KernelSGDDWD(_BaseDWD):
         self.random_state = random_state
         self.max_seconds = max_seconds
         self.prediction_batch_size = prediction_batch_size
+        self.prediction_backend = prediction_backend
         self.kernel_cache_bytes = kernel_cache_bytes
         self.optimizer_backend = optimizer_backend
 
@@ -640,12 +654,17 @@ class KernelSGDDWD(_BaseDWD):
         return self._fit(X, y, validation_data, "kernel", checkpoint_callback)
 
     def decision_function(self, X):
+        return self._decision_function_with_backend(X)
+
+    def _decision_function_with_backend(self, X, backend=None):
+        """Apply a prediction choice without changing fitted model state."""
         check_is_fitted(self)
         X = validate_data(self, X, reset=False, dtype=np.float64, accept_sparse=False)
+        backend = _prediction_backend(self) if backend is None else backend
         if self._kernel_spec_.kernel == "rbf" and self.gamma_ > 0:
-            return rbf_prediction_scores(X, self.basis_, self.dual_coef_[0],
-                                         self.intercept_[0], self.gamma_,
-                                         self.prediction_batch_size)
+            scores = rbf_prediction_scores_blas if backend == "blas" else rbf_prediction_scores
+            return scores(X, self.basis_, self.dual_coef_[0], self.intercept_[0],
+                          self.gamma_, self.prediction_batch_size)
         return _scores("kernel", X, self.dual_coef_[0], self.intercept_[0],
                        self.basis_, self.gamma_, self.prediction_batch_size,
                        kernel_spec=self._kernel_spec_)
@@ -696,14 +715,16 @@ class TwoStageDWDClassifier(_BaseDWD):
     in KernelSGDDWD; the linear stage does not use this cache.
     optimizer_backend applies to both stages. stage_diagnostics_ reports each
     actual backend; optimizer_backend_ is 'mixed' if stage paths differ.
+    prediction_backend='direct' or 'blas' follows KernelSGDDWD and affects only
+    kernel-stage prediction. The top-level choice also applies after fitting.
     """
     def __init__(self, *, retention_fraction=0.3, lambd=1e-6,
                  kernel="rbf", gamma="scale", kernel_kws=None,
                  batch_size=1, sampling="with_replacement",
                  max_epochs=200, validation_interval=5, patience=3, min_epochs=10,
                  tol=1e-4, stopping="auto", random_state=None, max_seconds=None,
-                 linear_max_seconds=None, prediction_batch_size=256, kernel_cache_bytes=0,
-                 optimizer_backend="python"):
+                 linear_max_seconds=None, prediction_batch_size=256,
+                 prediction_backend="direct", kernel_cache_bytes=0, optimizer_backend="python"):
         self.retention_fraction = retention_fraction
         self.lambd = lambd
         self.kernel = kernel
@@ -721,6 +742,7 @@ class TwoStageDWDClassifier(_BaseDWD):
         self.max_seconds = max_seconds
         self.linear_max_seconds = linear_max_seconds
         self.prediction_batch_size = prediction_batch_size
+        self.prediction_backend = prediction_backend
         self.kernel_cache_bytes = kernel_cache_bytes
         self.optimizer_backend = optimizer_backend
 
@@ -734,6 +756,7 @@ class TwoStageDWDClassifier(_BaseDWD):
             raise ValueError("retention_fraction must be <= 1")
         _penalty(self)
         _integer(self.prediction_batch_size, "prediction_batch_size")
+        _prediction_backend(self)
         _cache_controls(self)
         if self.linear_max_seconds is not None:
             _positive(self.linear_max_seconds, "linear_max_seconds")
@@ -811,7 +834,7 @@ class TwoStageDWDClassifier(_BaseDWD):
             kernel=self.kernel_, gamma=self.gamma_ if self.gamma_ is not None else self.gamma,
             kernel_kws=copy.deepcopy(self._kernel_input_kws_),
             random_state=self.stage_seeds_["kernel_sgd"], prediction_batch_size=self.prediction_batch_size,
-            kernel_cache_bytes=self.kernel_cache_bytes)
+            prediction_backend=_prediction_backend(self), kernel_cache_bytes=self.kernel_cache_bytes)
         # Keep the kernel object for diagnostics after failures; fittedness is
         # controlled explicitly, never inferred from the existence of this object.
         self.kernel_estimator_ = kernel
@@ -838,4 +861,4 @@ class TwoStageDWDClassifier(_BaseDWD):
     def decision_function(self, X):
         check_is_fitted(self)
         X = validate_data(self, X, reset=False, dtype=np.float64, accept_sparse=False)
-        return self.kernel_estimator_.decision_function(X)
+        return self.kernel_estimator_._decision_function_with_backend(X, _prediction_backend(self))
