@@ -10,6 +10,7 @@ import argparse
 from dataclasses import asdict
 import hashlib
 import json
+import numbers
 import os
 from pathlib import Path
 import platform
@@ -24,7 +25,7 @@ from two_stage_sgd_dwd import mnist_param_grid
 from two_stage_sgd_dwd.datasets import load_mnist_pair
 from _adaptive_grid import (AdaptiveSearchConfig, candidate_key, next_search_stage,
                             ordered_eligible)
-from _mnist_cv import FoldEvaluator
+from _mnist_cv import FoldEvaluator, execution_identity
 
 
 def write_json(path, value):
@@ -87,6 +88,45 @@ def _file_hash(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _execution_controls(args):
+    backend = getattr(args, 'optimizer_backend', 'python')
+    cache_bytes = getattr(args, 'kernel_cache_bytes', 0)
+    if backend not in ('python', 'auto', 'native'):
+        raise ValueError('optimizer-backend must be python, auto, or native')
+    if (isinstance(cache_bytes, (bool, np.bool_)) or
+            not isinstance(cache_bytes, numbers.Integral) or cache_bytes < 0):
+        raise ValueError('kernel-cache-bytes must be a nonnegative integer')
+    return {'optimizer_backend': backend, 'kernel_cache_bytes': int(cache_bytes)}
+
+
+def _implementation_bytes(identity):
+    package = Path(two_stage_sgd_dwd.__file__).parent
+    files = list(package.glob('*.py'))
+    files += [Path(__file__).with_name(name) for name in
+              ('tune_mnist.py', '_adaptive_grid.py', '_mnist_cv.py')]
+    if identity['extension_available']:
+        name = identity['extension_filename']
+        if not isinstance(name, str) or Path(name).name != name:
+            raise ValueError('Native extension identity must use a portable filename')
+        binary = package / name
+        if not binary.is_file() or _file_hash(binary) != identity['extension_sha256']:
+            raise ValueError('Native extension differs from the execution identity')
+        files.append(binary)
+    contents = {path.name: path.read_bytes() for path in files}
+    if len(contents) != len(files):
+        raise ValueError('Implementation snapshot source filenames must be unique')
+    return contents
+
+
+def _verify_execution_identity(config):
+    expected = config['execution_identity']
+    if execution_identity(config['optimizer_backend']) != expected:
+        raise ValueError('Native execution identity differs from the saved run')
+    if expected['extension_available']:
+        if config['implementation_sha256'].get(expected['extension_filename']) != expected['extension_sha256']:
+            raise ValueError('Native extension is missing from the implementation snapshot identity')
+
+
 def load_qualified_selection(directory):
     """Load locked settings only after the adaptive search earns acceptance.
 
@@ -115,9 +155,11 @@ def load_qualified_selection(directory):
         raise ValueError('Qualified selection disagrees with the saved review')
     config = json.loads((directory / 'config.json').read_text(encoding='utf-8'))
     for name in ('epochs', 'sampling', 'batch_size', 'stopping', 'random_state',
-                 'preprocessing', 'package_version'):
+                 'preprocessing', 'package_version', 'optimizer_backend',
+                 'kernel_cache_bytes', 'execution_identity'):
         if locked.get(name) != config[name]:
             raise ValueError(f'Qualified selection controls differ: {name}')
+    _verify_execution_identity(config)
     verify_implementation_snapshot(directory / 'implementation-snapshot', config['implementation_sha256'])
     return locked
 
@@ -147,6 +189,9 @@ def run_search(args, *, param_grid=None):
         raise ValueError('max-candidates must accommodate the complete initial grid')
     # Validate grid and policy before loading data or creating output files.
     next_search_stage([], grid, policy)
+    execution_controls = _execution_controls(args)
+    native_identity = execution_identity(execution_controls['optimizer_backend'])
+    implementation_bytes = _implementation_bytes(native_identity)
     data = load_mnist_pair(args.data_dir, args.digits, partition='train')
     indices = balanced_indices(data.y, args.train_size, args.random_state)
     X, y, ids = data.X[indices], data.y[indices], data.ids[indices]
@@ -156,18 +201,13 @@ def run_search(args, *, param_grid=None):
                                 random_state=args.random_state).split(X, y))
     split_payload = {'observation_ids': ids.tolist(),
         'folds': [{'fit': fit.tolist(), 'score': score.tolist()} for fit, score in folds]}
-    implementation_files = list(Path(two_stage_sgd_dwd.__file__).parent.glob('*.py'))
-    implementation_files += [Path(__file__).with_name(name) for name in
-                             ('tune_mnist.py', '_adaptive_grid.py', '_mnist_cv.py')]
-    implementation_bytes = {path.name: path.read_bytes() for path in implementation_files}
-    if len(implementation_bytes) != len(implementation_files):
-        raise ValueError('Implementation snapshot source filenames must be unique')
     import scipy
     import sklearn
-    config = {'schema_version': 2, 'digits': list(data.digits),
+    config = {'schema_version': 3, 'digits': list(data.digits),
         'train_size': args.train_size, 'folds': args.folds,
         'epochs': args.epochs, 'random_state': args.random_state, 'batch_size': 1,
         'sampling': 'with_replacement', 'stopping': 'fixed',
+        **execution_controls, 'execution_identity': native_identity,
         'preprocessing': 'pixels_divided_by_255',
         'broad_grid': args.broad_grid, 'policy': asdict(policy),
         'threads': args.threads, 'data_hashes': data.hashes,
@@ -231,14 +271,18 @@ def run_search(args, *, param_grid=None):
             stage['score_after'] = ranked[0]['mean_score'] if ranked else None
     write_json(out / 'stages.json', stages)
     evaluator = FoldEvaluator(X, y, ids, folds, max_epochs=args.epochs,
-                              random_state=args.random_state, batch_size=1)
+                              random_state=args.random_state, batch_size=1,
+                              **execution_controls)
 
     def rank():
         return ordered_eligible(records, expected_folds=args.folds)
 
     def evaluate_candidate(stage, params):
         try:
-            return evaluator.evaluate(params)
+            record = evaluator.evaluate(params)
+            if record.get('execution_identity') != native_identity:
+                raise ValueError('Evaluator execution identity differs from the saved run')
+            return record
         except (Exception, KeyboardInterrupt, SystemExit) as exc:
             failure = {'stage': stage, 'params': dict(params),
                        'error_type': type(exc).__name__, 'message': str(exc),
@@ -329,10 +373,12 @@ def run_search(args, *, param_grid=None):
                    'winner_bracket': selection['winner_bracket'],
                    'stable_refinement_rounds': selection['stable_refinement_rounds']})
         if accepted:
+            _verify_execution_identity(config)
             locked = {'params': selection['params'], 'epochs': args.epochs,
                       'sampling': 'with_replacement', 'batch_size': 1, 'stopping': 'fixed',
                       'random_state': args.random_state, 'preprocessing': config['preprocessing'],
                       'package_version': config['package_version'],
+                      **execution_controls, 'execution_identity': native_identity,
                       'evidence_sha256': {name: _file_hash(out / name) for name in
                           ('config.json', 'splits.json', 'records.jsonl', 'selection.json', 'review.json')}}
             write_json(out / 'qualified-selection.json', locked)
@@ -352,6 +398,10 @@ def main(argv=None):
     parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--random-state', type=int, default=42)
     parser.add_argument('--threads', type=int, default=1)
+    parser.add_argument('--optimizer-backend', choices=('python', 'auto', 'native'), default='python',
+                        help='Optimizer implementation; native requires the optional compiled extension')
+    parser.add_argument('--kernel-cache-bytes', type=int, default=0,
+                        help='Maximum lazy kernel-column payload per fit in bytes; 0 disables caching')
     parser.add_argument('--broad-grid', action='store_true')
     parser.add_argument('--max-candidates', type=int, default=500)
     parser.add_argument('--max-expansions', type=int, default=3)
@@ -370,6 +420,7 @@ def main(argv=None):
     if args.folds < 2 or args.random_state < 0:
         parser.error('Require folds>=2 and nonnegative random-state')
     try:
+        execution_controls = _execution_controls(args)
         policy = _policy_config(args)
     except (TypeError, ValueError) as exc:
         parser.error(str(exc))
@@ -377,6 +428,7 @@ def main(argv=None):
         print(json.dumps({'prepared_only': True,
             'initial_candidates': len(ParameterGrid(mnist_param_grid(broad=args.broad_grid))),
             'folds': args.folds, 'epochs': args.epochs, 'policy': asdict(policy),
+            **execution_controls,
             'official_test_partition_loaded': False}))
         return
     if args.data_dir is None or args.output_dir is None:

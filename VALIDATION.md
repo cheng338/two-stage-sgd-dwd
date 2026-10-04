@@ -1,3 +1,32 @@
+# Development verification — accelerated MNIST tuning example
+
+On October 4, 2026, the optional tuning controls passed **462 tests and 5,599
+subtests** with the released native extension and **439 tests and 2,959
+subtests** in a separate portable source copy, with 23 native-dependent skips.
+Each suite produced the existing warning from a deliberately invalid-label
+fixture. Checks cover default preservation, public-estimator parity, fold-local
+screening reuse, backend/cache diagnostics, fallback and error propagation,
+native-binary snapshots, and incompatible resume/qualification rejection.
+No solver source, search grid, stopping rule, or estimator default changed.
+
+A training-only implementation benchmark used 600 balanced observations for
+each of MNIST pairs 2–3, 4–9, and 3–8, pixels divided by 255, three CV folds,
+30% retention, 20 fixed epochs, and two parameter settings. Five balanced-order
+timing repetitions used Python 3.12 in `py12_df_aocl` with one native thread.
+The original Python example took 2.306–2.313 seconds per complete two-candidate
+evaluation; native execution with a 64 MiB lazy-cache payload bound took
+0.186–0.187 seconds, a 12.3–12.4-fold speedup on this bounded workload.
+Keeping screening reuse also reduced those accelerated evaluation times by
+approximately 29% compared with refitting screening for both candidates.
+
+Retained observations, coefficients, intercepts, RNG states, and validation
+scores agreed exactly with the original path and independent public-estimator
+fits in this environment. All timed evaluations preserved their CV metrics.
+This exposes acceleration already present in version 0.7.0; it is not an
+additional speedup over the completed main study, which already used the
+compiled optimizer, or a full-study runtime forecast. Official test data were
+not loaded. Native build identity and cache capacity remain explicit controls.
+
 # Development verification — prediction buffer reuse
 
 On October 4, 2026, the prediction-only update passed **417 tests and 5,599

@@ -183,6 +183,16 @@ Within-fold caching reuses the first-stage fit and selection ranking; its
 equivalence to ordinary complete fits is checked, and fitted state never
 crosses fold boundaries.
 
+The tuner defaults to `--optimizer-backend python --kernel-cache-bytes 0`.
+To use the optional compiled optimizer and a 64 MiB lazy kernel-column cache
+per kernel fit, add `--optimizer-backend native --kernel-cache-bytes 67108864`
+to the command above. `--optimizer-backend auto` permits Python fallback when
+the extension is unavailable. These options preserve the folds, stage seeds,
+sampling, epoch budgets, and within-fold screening reuse. Saved fold records
+report the actual backends and cache diagnostics. Resume and qualified-setting
+checks bind the requested controls and, for `auto` or `native`, extension
+availability and binary content; changing them requires a new output directory.
+
 The runner evaluates `lambd=1e-6, gamma="scale", retention_fraction=0.3` as a
 separate control, then searches the numeric grid. Its defaults match the
 ensemble adaptive workflow: at most **three expansion rounds** and **500

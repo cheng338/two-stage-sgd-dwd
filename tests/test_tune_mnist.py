@@ -30,6 +30,7 @@ def arguments(path, **changes):
                   folds=2, epochs=3, random_state=17, threads=1, broad_grid=False,
                   max_candidates=200, max_expansions=3, refinement_rounds=None,
                   stable_refinement_rounds=2, bracket_factor=2., top_k=1,
+                  optimizer_backend='python', kernel_cache_bytes=0,
                   output_dir=path / 'run', run=True, resume=False)
     return SimpleNamespace(**(values | changes))
 
@@ -51,6 +52,7 @@ class Scores:
 
     def factory(self, X, y, ids, folds, **controls):
         self.constructed.append((X.copy(), y.copy(), ids.copy(), copy.deepcopy(folds), controls))
+        self.execution_identity = _RUNNER.execution_identity(controls['optimizer_backend'])
         return SimpleNamespace(evaluate=self.evaluate)
 
     def evaluate(self, params):
@@ -70,7 +72,8 @@ class Scores:
         folds = [{'fold': index, 'accuracy': score, 'eligible': eligible,
                   'status': 'trained' if eligible else 'single_class_selection'} for index in range(2)]
         return {'params': copy.deepcopy(params), 'mean_score': score,
-                'eligible': eligible, 'folds': folds}
+                'eligible': eligible, 'folds': folds,
+                'execution_identity': copy.deepcopy(self.execution_identity)}
 
     @property
     def search_calls(self):
@@ -98,6 +101,8 @@ def test_dry_run_has_aligned_defaults_without_loading_or_fitting(capsys):
     assert result['policy']['max_refinements'] is None
     assert result['policy']['stable_refinement_rounds'] == 2
     assert result['policy']['bracket_factor'] == 2.
+    assert result['optimizer_backend'] == 'python'
+    assert result['kernel_cache_bytes'] == 0
     loader.assert_not_called()
     evaluator.assert_not_called()
 
@@ -126,6 +131,8 @@ def test_repeated_refinement_earns_acceptance_and_locks_evidence(tmp_path):
     locked = _RUNNER.load_qualified_selection(args.output_dir)
     assert locked['params'] == result['params'] and locked['epochs'] == args.epochs
     assert locked['stopping'] == 'fixed'
+    assert locked['optimizer_backend'] == 'python' and locked['kernel_cache_bytes'] == 0
+    assert locked['execution_identity']['extension_available'] is None
     assert len(fake.search_calls) == result['attempted_candidates']
     loader.assert_called_once_with(args.data_dir, args.digits, partition='train')
     X, y, ids, folds, controls = fake.constructed[0]
@@ -133,6 +140,7 @@ def test_repeated_refinement_earns_acceptance_and_locks_evidence(tmp_path):
     np.testing.assert_array_equal(y, data.y)
     np.testing.assert_array_equal(ids, data.ids)
     assert 'validation_data' not in controls
+    assert controls['optimizer_backend'] == 'python' and controls['kernel_cache_bytes'] == 0
     assert sorted(i for _, validation in folds for i in validation) == list(range(len(y)))
     for train, validation in folds:
         assert not set(train).intersection(validation)
@@ -221,7 +229,8 @@ def test_stage_completion_before_policy_cursor_is_counted_once_on_resume(tmp_pat
     assert len(fake.search_calls) == result['attempted_candidates']
 
 
-@pytest.mark.parametrize('change', ['epochs', 'data_hashes', 'grid', 'splits', 'snapshot'])
+@pytest.mark.parametrize('change', ['epochs', 'data_hashes', 'grid', 'splits', 'snapshot',
+                                  'optimizer_backend', 'kernel_cache_bytes'])
 def test_resume_rejects_identity_changes_without_fitting(tmp_path, change):
     args, fake = arguments(tmp_path), Scores(fail_once=(1., 1.))
     with synthetic(fake) as (_, data):
@@ -233,6 +242,10 @@ def test_resume_rejects_identity_changes_without_fitting(tmp_path, change):
         custom = None
         if change == 'epochs':
             args.epochs += 1
+        elif change == 'optimizer_backend':
+            args.optimizer_backend = 'auto'
+        elif change == 'kernel_cache_bytes':
+            args.kernel_cache_bytes = 1024
         elif change == 'data_hashes':
             data.hashes['images'] = 'different'
         elif change == 'grid':
@@ -296,7 +309,9 @@ def test_qualified_settings_reject_changed_evidence(tmp_path, name):
         _RUNNER.load_qualified_selection(args.output_dir)
 
 
-@pytest.mark.parametrize('change', ['epochs', 'batch_size', 'stopping', 'random_state', 'preprocessing', 'package_version', 'missing_hashes'])
+@pytest.mark.parametrize('change', ['epochs', 'batch_size', 'stopping', 'random_state', 'preprocessing',
+                                  'package_version', 'optimizer_backend', 'kernel_cache_bytes',
+                                  'execution_identity', 'missing_hashes'])
 def test_qualified_settings_bind_controls_to_the_validated_configuration(tmp_path, change):
     args, fake = arguments(tmp_path), Scores()
     with synthetic(fake):
@@ -310,3 +325,135 @@ def test_qualified_settings_bind_controls_to_the_validated_configuration(tmp_pat
     path.write_text(json.dumps(locked))
     with pytest.raises(ValueError, match='controls differ|required evidence'):
         _RUNNER.load_qualified_selection(args.output_dir)
+
+
+def test_cli_acceleration_options_are_explicit_and_keep_dry_run_data_free(capsys):
+    with patch.object(_RUNNER, 'load_mnist_pair') as loader, patch.object(_RUNNER, 'FoldEvaluator') as evaluator:
+        _RUNNER.main(['--optimizer-backend', 'native', '--kernel-cache-bytes', '67108864'])
+    proposed = json.loads(capsys.readouterr().out)
+    assert proposed['optimizer_backend'] == 'native'
+    assert proposed['kernel_cache_bytes'] == 64 * 1024**2
+    loader.assert_not_called()
+    evaluator.assert_not_called()
+
+
+@pytest.mark.parametrize('options', [['--optimizer-backend', 'unknown'], ['--kernel-cache-bytes', '-1']])
+def test_cli_invalid_acceleration_rejected_before_data(options):
+    with patch.object(_RUNNER, 'load_mnist_pair') as loader, pytest.raises(SystemExit):
+        _RUNNER.main(options)
+    loader.assert_not_called()
+
+
+@contextmanager
+def native_identity_fixture(path, available=True):
+    """Synthetic bytes exercise snapshot identity without importing a binary."""
+    package = path / 'package'
+    package.mkdir()
+    init = package / '__init__.py'
+    init.write_text('# synthetic package source\n', encoding='utf-8')
+    binary = package / '_sgd_accel.pyd'
+    binary.write_bytes(b'synthetic native build 1')
+    availability = [available]
+
+    def identity(backend):
+        return {'requested_backend': backend, 'extension_available': availability[0],
+                'extension_filename': binary.name if availability[0] else None,
+                'extension_sha256': hashlib.sha256(binary.read_bytes()).hexdigest() if availability[0] else None,
+                'package_version': _RUNNER.two_stage_sgd_dwd.__version__}
+
+    with patch.object(_RUNNER.two_stage_sgd_dwd, '__file__', str(init)), \
+            patch.object(_RUNNER, 'execution_identity', side_effect=identity):
+        yield binary, availability
+
+
+def test_native_configuration_snapshots_binary_and_locks_portable_identity(tmp_path):
+    args, fake = arguments(tmp_path, optimizer_backend='native', kernel_cache_bytes=67108864), Scores()
+    with native_identity_fixture(tmp_path) as (binary, _), synthetic(fake):
+        _RUNNER.run_search(args)
+        config = read(args.output_dir / 'config.json')
+        locked = _RUNNER.load_qualified_selection(args.output_dir)
+        assert (args.output_dir / 'implementation-snapshot' / binary.name).read_bytes() == binary.read_bytes()
+        expected = hashlib.sha256(binary.read_bytes()).hexdigest()
+        assert config['implementation_sha256'][binary.name] == expected
+        assert config['execution_identity']['extension_sha256'] == expected
+        assert str(tmp_path) not in json.dumps(config['execution_identity'])
+        assert locked['execution_identity'] == config['execution_identity']
+        assert locked['kernel_cache_bytes'] == 67108864
+        assert fake.constructed[0][-1]['optimizer_backend'] == 'native'
+        assert fake.constructed[0][-1]['kernel_cache_bytes'] == 67108864
+
+
+@pytest.mark.parametrize('change', ['binary', 'availability', 'snapshot'])
+def test_native_resume_rejects_binary_availability_or_saved_snapshot_changes(tmp_path, change):
+    args, fake = arguments(tmp_path, optimizer_backend='auto'), Scores(fail_once=(1., 1.))
+    with native_identity_fixture(tmp_path) as (binary, available), synthetic(fake):
+        with pytest.raises(RuntimeError, match='synthetic interruption'):
+            _RUNNER.run_search(args)
+        before = (args.output_dir / 'records.jsonl').read_bytes()
+        calls = copy.deepcopy(fake.calls)
+        if change == 'binary':
+            binary.write_bytes(b'synthetic native build 2')
+        elif change == 'availability':
+            available[0] = False
+        else:
+            (args.output_dir / 'implementation-snapshot' / binary.name).write_bytes(b'changed snapshot')
+        args.resume = True
+        with pytest.raises(ValueError, match='Resume|snapshot'):
+            _RUNNER.run_search(args)
+        assert fake.calls == calls
+        assert (args.output_dir / 'records.jsonl').read_bytes() == before
+
+
+def test_auto_without_extension_is_recorded_and_new_availability_blocks_resume(tmp_path):
+    args, fake = arguments(tmp_path, optimizer_backend='auto'), Scores()
+    with native_identity_fixture(tmp_path, available=False) as (binary, available), synthetic(fake):
+        _RUNNER.run_search(args)
+        config = read(args.output_dir / 'config.json')
+        assert config['execution_identity']['extension_available'] is False
+        assert binary.name not in config['implementation_sha256']
+        assert not (args.output_dir / 'implementation-snapshot' / binary.name).exists()
+        _RUNNER.load_qualified_selection(args.output_dir)
+        available[0] = True
+        calls = copy.deepcopy(fake.calls)
+        args.resume = True
+        with pytest.raises(ValueError, match='Resume'):
+            _RUNNER.run_search(args)
+        with pytest.raises(ValueError, match='execution identity'):
+            _RUNNER.load_qualified_selection(args.output_dir)
+        assert fake.calls == calls
+
+
+def test_qualified_native_settings_reject_live_binary_swap(tmp_path):
+    args, fake = arguments(tmp_path, optimizer_backend='native'), Scores()
+    with native_identity_fixture(tmp_path) as (binary, _), synthetic(fake):
+        _RUNNER.run_search(args)
+        binary.write_bytes(b'synthetic native build 2')
+        with pytest.raises(ValueError, match='execution identity'):
+            _RUNNER.load_qualified_selection(args.output_dir)
+
+
+def test_explicit_native_unavailable_fails_before_data_and_output(tmp_path):
+    args, fake = arguments(tmp_path, optimizer_backend='native'), Scores()
+    with synthetic(fake) as (loader, _), \
+            patch.object(_RUNNER, 'execution_identity', side_effect=ImportError('native extension unavailable')):
+        with pytest.raises(ImportError, match='native extension unavailable'):
+            _RUNNER.run_search(args)
+    loader.assert_not_called()
+    assert not args.output_dir.exists() and not fake.calls
+
+
+def test_evaluator_identity_disagreement_is_not_committed(tmp_path):
+    args, fake = arguments(tmp_path), Scores()
+    evaluate = fake.evaluate
+
+    def mismatched(params):
+        record = evaluate(params)
+        record['execution_identity']['package_version'] = 'different'
+        return record
+
+    with synthetic(fake), patch.object(fake, 'evaluate', side_effect=mismatched):
+        with pytest.raises(ValueError, match='Evaluator execution identity'):
+            _RUNNER.run_search(args)
+    assert not records(args.output_dir)
+    assert not (args.output_dir / 'inherited-default-control.json').exists()
+    assert read(args.output_dir / 'status.json')['state'] == 'failed'

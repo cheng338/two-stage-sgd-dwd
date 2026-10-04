@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Expose optional optimizer-backend and lazy kernel-cache controls in the
+  MNIST tuning example while preserving fold-local first-stage reuse and
+  the Python/zero-cache defaults. Record actual backends and cache usage.
+- Bind tuning resumes and qualified settings to their execution controls
+  and native-extension identity; include native bytes in saved
+  implementation snapshots when the extension is available.
+
 - Reuse one bounded RBF prediction buffer and validate the fitted basis and
   bandwidth once per prediction call. Preserve direct squared-distance
   arithmetic, finite-result checks, fitted state, and all training paths.

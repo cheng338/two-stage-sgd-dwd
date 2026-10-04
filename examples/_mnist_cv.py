@@ -3,7 +3,7 @@
 The caller supplies already scaled pixels and saved CV indices. This helper
 never loads test data, learns a scaler, or uses validation labels for fitting.
 Linear screening is shared only across candidates with identical training
-indices, epoch budget, batch size, and seed. Kernel models are discarded after
+indices, epoch budget, batch size, seed, and optimizer identity. Kernel models are discarded after
 scoring; only one current linear model and its training scores per fold remain.
 """
 
@@ -11,8 +11,10 @@ from __future__ import annotations
 
 from copy import deepcopy
 import hashlib
+import importlib
 import json
 import numbers
+from pathlib import Path
 from time import perf_counter
 
 import numpy as np
@@ -20,6 +22,7 @@ from sklearn.utils.multiclass import check_classification_targets, unique_labels
 from sklearn.utils.validation import check_array
 
 from two_stage_sgd_dwd import KernelSGDDWD, LinearSGDDWD, SelectionError, TrainingError
+from two_stage_sgd_dwd import __version__ as _PACKAGE_VERSION
 from two_stage_sgd_dwd._core import dwd_loss, select_near_boundary
 from two_stage_sgd_dwd._estimators import _generator
 from two_stage_sgd_dwd._kernels import resolve_kernel
@@ -47,6 +50,34 @@ def _ids_hash(ids):
     return hashlib.sha256(payload).hexdigest()
 
 
+def execution_identity(optimizer_backend="python"):
+    """Return portable provenance for the requested optimizer implementation.
+
+    Python execution does not import or depend on an unused native extension.
+    Auto/native identities bind the actually importable extension's bytes; an
+    unavailable extension is an explicit auto fallback or a native-only error.
+    The caller can persist this dictionary to reject incompatible resumes.
+    """
+    if not isinstance(optimizer_backend, str) or optimizer_backend not in ("python", "auto", "native"):
+        raise ValueError("optimizer_backend must be 'python', 'auto', or 'native'")
+    result = {"requested_backend": optimizer_backend, "extension_available": None,
+              "extension_filename": None, "extension_sha256": None,
+              "package_version": _PACKAGE_VERSION}
+    if optimizer_backend == "python":
+        return result
+    try:
+        native = importlib.import_module("two_stage_sgd_dwd._sgd_accel")
+    except (ImportError, OSError) as exc:
+        if optimizer_backend == "native":
+            raise ImportError("optimizer_backend='native' requires the optional compiled _sgd_accel extension") from exc
+        result["extension_available"] = False
+        return result
+    path = Path(native.__file__)
+    result.update(extension_available=True, extension_filename=path.name,
+                  extension_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+    return result
+
+
 class FoldEvaluator:
     """Evaluate RBF candidates with independently fitted CV screening stages.
 
@@ -69,12 +100,20 @@ class FoldEvaluator:
 
     Sampling is always with replacement. No validation_data or deadlines are
     passed to either optimizer, so successful fits must finish fixed epochs.
-    Changing max_epochs, random_state, or batch_size invalidates each affected
-    fold's linear cache on its next use. Numerical/unexpected errors propagate;
+    Optimizer defaults remain ``optimizer_backend='python'`` and
+    ``kernel_cache_bytes=0``. The backend applies to both stages; the optional
+    lazy byte-bounded training-column cache applies only to the kernel stage.
+    Positive cache capacity and explicit native execution require batch_size=1.
+    Auto reports its actual native path or Python fallback in each stage record.
+    Changing max_epochs, random_state, batch_size, or requested backend invalidates
+    each affected fold's linear cache on its next use; changing kernel cache
+    capacity does not. Native implementation identity must remain unchanged
+    throughout an evaluator's lifetime. Numerical/unexpected errors propagate;
     only one-class retained selections become ordinary ineligible records.
     """
 
-    def __init__(self, X, y, ids, folds, *, max_epochs, random_state=42, batch_size=1):
+    def __init__(self, X, y, ids, folds, *, max_epochs, random_state=42, batch_size=1,
+                 optimizer_backend="python", kernel_cache_bytes=0):
         self._X = check_array(X, dtype=np.float64, accept_sparse=False,
                               ensure_min_samples=2, copy=True)
         self._y = np.asarray(y).copy()
@@ -96,6 +135,10 @@ class FoldEvaluator:
         self.max_epochs = max_epochs
         self.random_state = random_state
         self.batch_size = batch_size
+        self.optimizer_backend = optimizer_backend
+        self.kernel_cache_bytes = kernel_cache_bytes
+        self._execution_identities = {}
+        self.execution_identity_ = None
         self._controls()
         self._folds = self._validate_folds(folds)
         for array in (self._X, self._y, self._ids):
@@ -108,8 +151,24 @@ class FoldEvaluator:
         self.random_state = _integer(self.random_state, "random_state", 0)
         if not (isinstance(self.batch_size, str) and self.batch_size == "full"):
             self.batch_size = _integer(self.batch_size, "batch_size")
+        self.kernel_cache_bytes = _integer(self.kernel_cache_bytes, "kernel_cache_bytes", 0)
+        if self.kernel_cache_bytes and self.batch_size != 1:
+            raise ValueError("Positive kernel_cache_bytes requires batch_size=1")
+        if self.optimizer_backend == "native" and self.batch_size != 1:
+            raise ValueError("optimizer_backend='native' requires batch_size=1")
+        self._check_execution_identity()
         return {"max_epochs": self.max_epochs, "batch_size": self.batch_size,
-                "sampling": "with_replacement", "stopping": "fixed"}
+                "sampling": "with_replacement", "stopping": "fixed",
+                "optimizer_backend": self.optimizer_backend}
+
+    def _check_execution_identity(self):
+        current = execution_identity(self.optimizer_backend)
+        previous = self._execution_identities.get(self.optimizer_backend)
+        if previous is not None and current != previous:
+            raise RuntimeError("Optimizer execution identity changed during fold evaluation")
+        self._execution_identities[self.optimizer_backend] = deepcopy(current)
+        self.execution_identity_ = deepcopy(current)
+        return current
 
     def _validate_folds(self, folds):
         validated = []
@@ -156,7 +215,7 @@ class FoldEvaluator:
     @staticmethod
     def _fit_diagnostics(model):
         """Keep usable budget-limited fits separate from optimality claims."""
-        return {"model_status": model.model_status_, "stop_reason": model.stop_reason_,
+        result = {"model_status": model.model_status_, "stop_reason": model.stop_reason_,
                 "termination_criterion": model.termination_criterion_,
                 "criterion_reached": bool(model.criterion_reached_),
                 "cap_reached": bool(model.cap_reached_), "fit_usable": bool(model.fit_usable_),
@@ -166,10 +225,22 @@ class FoldEvaluator:
                 "converged": bool(model.converged_),
                 "n_epochs_completed": float(model.n_epochs_completed_),
                 "n_updates": int(model.n_updates_),
-                "n_samples_seen": int(model.n_samples_seen_)}
+                "n_samples_seen": int(model.n_samples_seen_),
+                "optimizer_backend": model.optimizer_backend_,
+                "optimizer_backend_reason": model.optimizer_backend_reason_}
+        if hasattr(model, "kernel_cache_bytes"):
+            result.update(kernel_cache_bytes=int(model.kernel_cache_bytes),
+                          kernel_evaluation_count=int(model.kernel_evaluation_count_),
+                          kernel_cache_hits=int(model.kernel_cache_hits_),
+                          kernel_cache_misses=int(model.kernel_cache_misses_),
+                          kernel_cache_evictions=int(model.kernel_cache_evictions_),
+                          kernel_cache_peak_bytes=int(model.kernel_cache_peak_bytes_),
+                          kernel_cache_capacity_columns=int(model.kernel_cache_capacity_columns_))
+        return result
 
     def _linear_stage(self, fold_index, controls):
-        cache_key = (self.max_epochs, self.random_state, self.batch_size)
+        cache_key = (self.max_epochs, self.random_state, self.batch_size,
+                     json.dumps(self.execution_identity_, sort_keys=True, separators=(",", ":")))
         cached = self._linear_cache.get(fold_index)
         if cached is not None and cached["key"] == cache_key:
             return cached, True
@@ -252,7 +323,8 @@ class FoldEvaluator:
             finally:
                 record["selection_seconds"] = float(perf_counter() - began_selection)
             model = KernelSGDDWD(**controls, lambd=params["lambd"], kernel="rbf", gamma=gamma,
-                                 random_state=stage_seeds["kernel_sgd"])
+                                 random_state=stage_seeds["kernel_sgd"],
+                                 kernel_cache_bytes=self.kernel_cache_bytes)
             model.fit(self._X[selected_rows], self._y[selected_rows])
             self._check_complete(model, len(selected_rows))
             record["kernel_seconds"] = float(model.fit_seconds_)
@@ -273,6 +345,9 @@ class FoldEvaluator:
                           score_seconds=float(perf_counter() - began_score))
             records.append(record)
         eligible = all(record["eligible"] for record in records)
+        # Check once at candidate boundaries, never in an optimizer update. A
+        # changed extension cannot produce a completed/cache-compatible record.
+        self._check_execution_identity()
         return {"params": params, "eligible": eligible,
                 "mean_score": float(np.mean([record["accuracy"] for record in records])) if eligible else None,
-                "folds": records}
+                "folds": records, "execution_identity": deepcopy(self.execution_identity_)}
