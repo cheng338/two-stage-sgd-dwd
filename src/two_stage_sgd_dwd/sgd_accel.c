@@ -107,8 +107,21 @@ static PyObject *run_steps(PyObject *self, PyObject *args) {
         if (kind == 1) {
             shrink = 1.0 - steps[t] * (2.0 * regularization);
             if (!isfinite(shrink)) { error = PyUnicode_FromString("Nonfinite shrinkage"); goto numerical_end; }
-            for (Py_ssize_t j = 0; j < width; j++) next[j] = shrink * old[j];
-            next[i] -= multiplier;
+            if (ordinary_arrays) {
+                int all_finite = 1;
+                for (Py_ssize_t j = 0; j < width; j++) {
+                    next[j] = shrink * old[j];
+                    all_finite &= (isfinite(next[j]) != 0);
+                }
+                next[i] -= multiplier;
+                if (!all_finite || !isfinite(next[i])) {
+                    error = PyUnicode_FromString("Nonfinite coefficients"); goto numerical_end;
+                }
+                check_final_coefficients = 0;
+            } else {
+                for (Py_ssize_t j = 0; j < width; j++) next[j] = shrink * old[j];
+                next[i] -= multiplier;
+            }
         } else {
             double scale = 0;
             for (Py_ssize_t j = 0; j < width; j++) {

@@ -127,6 +127,12 @@ and prediction keep their existing paths.
 Measure complete cold fits before making speed claims. Include scaling and
 screening where used, kernel preparation, lazy cache filling, native setup,
 fitted-array publication, and prediction according to the declared comparison.
+
+For ordinary NumPy coefficient buffers, native kernel updates check finite
+values while writing all shrunk coefficients and check the sampled coefficient
+again after its loss update. This removes a separate scan without changing
+the multiplication or subtraction order, the failure message, or the committed
+update prefix. Custom coefficient buffers retain the separate final scan.
 `fit_seconds_` covers the estimator's fit call; preprocessing performed by an
 external Pipeline requires an outer timer. Scalar-update microbenchmarks do
 not establish overall runtime or an advantage over another DWD solver. Report

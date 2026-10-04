@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Combine native kernel shrinkage and finite-value checks for ordinary NumPy
+  coefficient buffers, then validate the sampled coefficient after its loss
+  update. Preserve arithmetic, failure recovery, and custom-array checks.
+
 - Validate fixed positive-RBF fitting inputs once for ordinary native kernel
   fits. Compute fresh training columns lazily with the same SciPy squared
   distances, arithmetic, and finite-result checks; retain the original path

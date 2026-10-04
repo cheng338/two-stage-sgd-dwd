@@ -1,3 +1,55 @@
+# Development verification — native kernel coefficient validation
+
+On October 4, 2026, combined native kernel shrinkage and finite-value checks
+passed **580 tests and 7,655 subtests** with the rebuilt extension. The same
+tests passed with the previous extension. A separate portable source copy
+passed **523 tests and 4,662 subtests**, with 57 native-dependent skips.
+Each suite produced only the existing warning from an invalid-label fixture.
+
+For ordinary NumPy coefficient buffers, the shrinkage loop checks each stored
+product while writing all coefficients. The sampled coefficient is then updated
+with the original separate subtraction and checked again. Custom buffers keep
+the previous separate scan. The update arithmetic, objective, sampling,
+learning rates, cache policy and failure commit point are unchanged. Checks
+cover signed zeros, subnormal values, product and subtraction overflow,
+custom-buffer behavior, complete fitted states and failed-update RNG recovery.
+The improvement requires the rebuilt native extension; older extensions and
+the Python backend retain their existing paths.
+
+Complete-fit timings used MNIST pairs 2–3, 4–9 and 3–8, with saved training
+draws 00, 04 and 09 per pair. Each draw was timed twice in alternating
+implementation order: six paired timings per pair, not six independent
+training draws. Each fresh fit included StandardScaler and both native stages
+at 800 epochs, 30% retention and a 64 MiB lazy-cache payload limit. The runtime
+was py12_df_aocl with NumPy 2.5.2 and one native thread. Means and sample SDs
+combine the three draws and their two timing repetitions.
+
+| Pair | Previous fit, s (mean ± SD) | Combined checks, s (mean ± SD) | Time saved |
+| --- | ---: | ---: | ---: |
+| 2–3 | 4.236 ± 0.073 | 4.166 ± 0.079 | 1.7% |
+| 4–9 | 4.123 ± 0.079 | 4.039 ± 0.044 | 2.0% |
+| 3–8 | 4.191 ± 0.058 | 4.113 ± 0.050 | 1.9% |
+
+The candidate was faster in 17 of 18 complete-fit comparisons. These results
+did not meet the predeclared 1.05× complete-fit speedup target in any pair.
+The target and measurements are retained; the change is included as a modest
+incremental optimization after review of its localized implementation and
+exact tested equivalence.
+
+Separate short kernel fits used each pair's standardized retained draw 00
+subset, with six paired timings per cache regime. Cold full-cache fits used
+one epoch; evicting, disabled and subcolumn-budget fits used five epochs.
+Their mean time reductions ranged from 0.003% to 0.376%, providing little
+practical gain in these controls. These timings are not complete 800-epoch
+two-stage fit times.
+
+All 90 paired comparisons matched exact non-timing fitted states, coefficients,
+RNG states, selections, kernel/cache counters, scores and predicted labels.
+All nine saved complete-model configurations reproduced original study score
+hashes. Inputs and historical study outputs remained unchanged. No test labels
+were loaded and no statistical settings were retuned. Results describe the
+tested workloads and runtime. See [optimizer details](docs/optimizer-backends.md).
+
 # Development verification — native RBF input validation
 
 On October 4, 2026, guarded RBF column preparation passed **569 tests and
