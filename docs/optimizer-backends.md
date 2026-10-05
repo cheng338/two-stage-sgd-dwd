@@ -43,6 +43,15 @@ versions. The version guard is deliberately narrow; adding another version
 requires checking its implementation and exact stream/state parity. See
 [NumPy's compatibility policy](https://numpy.org/doc/stable/reference/random/compatibility.html).
 
+For those same exact built-in generators on NumPy 2.5.2, native optimization
+uses the independent state returned by the getter as its epoch rollback
+snapshot, avoiding a redundant deep copy. This applies to both native sampling
+policies and preserves the getter position and failed-update RNG restoration.
+Other NumPy versions, generator subclasses and custom bit generators retain
+the deep copy. Initial, selected, final and returned model snapshots keep their
+existing independent copies. This is separate from index-array preparation;
+extending either optimized path requires checking the relevant implementation.
+
 It does not prepare a kernel Gram matrix. A failed numerical update retains
 the diagnostic state from the preceding committed update and the RNG position
 after the attempted draw. The fit remains invalid. Structural errors propagate;

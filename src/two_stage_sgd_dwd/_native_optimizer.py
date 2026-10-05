@@ -136,13 +136,20 @@ def optimize(kind, X, y, rng, est, native, column_cache=None):
             if not hit:
                 kernel_counter[0] += m
             return values
+    # These NumPy getters already return independent state dictionaries/arrays.
+    independent_epoch_state = (
+        np.__version__ == "2.5.2" and type(rng) is np.random.Generator
+        and type(rng.bit_generator) in (np.random.PCG64, np.random.PCG64DXSM,
+                                       np.random.Philox, np.random.SFC64, np.random.MT19937))
     updates = 0
     update_seconds = 0.0
     error = None
     for _ in range(int(est.max_epochs)):
         began_update = time.perf_counter()
         try:
-            epoch_rng = copy.deepcopy(rng.bit_generator.state)
+            epoch_rng = rng.bit_generator.state
+            if not independent_epoch_state:
+                epoch_rng = copy.deepcopy(epoch_rng)
             if est.sampling == "shuffle":
                 indices = np.asarray(rng.permutation(m), dtype=np.int64)
             else:

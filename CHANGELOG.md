@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Reuse independent epoch RNG snapshots for native fits using the verified
+  NumPy 2.5.2 built-in generators, avoiding redundant deep copies. Preserve
+  sampled streams, failed-update restoration and saved model states; retain
+  deep copies for other versions and custom generators.
+
 - Reuse selected margins when evaluating the Python DWD derivative,
   avoiding a duplicate array copy while preserving division order,
   input validation, scalar and batch updates, and exact tested results.

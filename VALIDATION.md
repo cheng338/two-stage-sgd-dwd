@@ -1,3 +1,56 @@
+# Development verification — native epoch RNG snapshot reuse
+
+On October 5, 2026, independent epoch RNG snapshot reuse passed **603 tests
+and 9,160 subtests** with the existing compiled extension. A portable source
+copy passed **533 tests and 4,807 subtests**, with 70 native-dependent skips.
+Both suites produced only the existing invalid-label fixture warning. These
+checks include the previously added Python derivative margin reuse.
+
+For NumPy 2.5.2, the exact built-in `Generator` with `PCG64`, `PCG64DXSM`,
+`Philox`, `SFC64`, or `MT19937` returns independent epoch-state dictionaries
+and arrays. Native optimization uses that snapshot directly, avoiding another
+deep copy. Other versions and custom or subclassed generators keep the copy.
+The state getter stays before the same epoch draws. Sampling, update arithmetic,
+learning rates and failure restoration/replay are unchanged. Initial, final,
+selected and returned model snapshots retain their existing independent copies.
+Source checks and tests cover getter/setter ownership, mutation of snapshots,
+shared mutable custom getters, failed updates and subsequent RNG draws.
+
+A confirmation benchmark used the current package, py12_df_aocl, NumPy 2.5.2
+and one native thread. Sixteen fixed small-data cases had eight paired timing
+blocks each, with case order randomized by a declared seed and each variant
+running first four times. Blocks contained 4, 8 or 256 fresh fits as declared
+before timing: 4,832 timed fits plus 16 warmup fits per implementation.
+Construction and complete fitting were timed; input creation, prediction and
+correctness comparisons were outside timing. Every repeated model matched
+exact non-timing state, scores and labels. Inputs and caller RNGs were unchanged.
+
+All 96 paired blocks across twelve 200-epoch built-in-generator cases were
+faster, with 6.62–24.63% mean time savings and gains in both execution orders.
+These deliberately small native workloads use 8 or 32 observations, a full
+kernel cache and 100% retention for two-stage fixtures. The two default-seed
+two-stage cases saved 15.23% and 6.62%, about 1.18–1.20 ms per fit. These gains
+do not describe the default Python backend, usual 30% retention or general
+large-data training. Earlier MNIST complete-fit means saved only 0.05–0.56%.
+
+The custom-generator controls were approximately unchanged in the confirmation
+(0.077% and 0.055% mean savings, four of eight pairs faster each), following
+original means that were 0.198% and 0.019% slower. Tiny one-epoch timings remain
+unstable: the linear mean was 4.665% slower despite six of eight pairs being
+faster and a positive 1.369% median paired saving. One candidate block took
+88.455 ms versus its paired baseline of 61.8125 ms. The kernel mean saved
+0.211% with seven of eight pairs faster, but one block was 10.15% slower.
+Its original run averaged 4.21% slower. No observation was excluded, and the
+causes of the slow blocks were not established. These means do not support a
+reliable one-epoch speed claim or a guarantee of no regressions.
+
+This is a targeted optimization for repeated native epochs. The seven-line
+Python guard adds no native API or compiled code; extending the optimized
+path to another NumPy version requires implementation and state-parity checks.
+The default backend, kernel-cache settings and statistical method are unchanged.
+These are implementation timings on fixed inputs, not new CV repetitions or
+accuracy evaluations. See [optimizer details](docs/optimizer-backends.md).
+
 # Development verification — Python derivative margin reuse
 
 On October 4, 2026, reusing the selected margin array in the Python DWD
