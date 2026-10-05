@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Reuse selected margins when evaluating the Python DWD derivative,
+  avoiding a duplicate array copy while preserving division order,
+  input validation, scalar and batch updates, and exact tested results.
+
 - Retrieve native linear fitting rows directly from their existing tuple,
   avoiding a Python index and method call per update. Preserve row validation,
   update arithmetic and failure recovery; retain callable kernel loaders and

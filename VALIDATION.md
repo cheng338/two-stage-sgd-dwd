@@ -1,3 +1,40 @@
+# Development verification — Python derivative margin reuse
+
+On October 4, 2026, reusing the selected margin array in the Python DWD
+derivative passed **597 tests and 8,345 subtests** with the existing compiled
+extension. A portable source copy passed **528 tests and 4,730 subtests**,
+with 69 native-dependent skips. Both suites produced only the existing
+invalid-label fixture warning.
+
+The derivative extracts margins above 0.5 once and reuses that array for the
+same two sequential divisions. Input conversion, branch selection, result
+validation and scalar/array return behavior are unchanged. Tests check exact
+bytes at the threshold and extreme finite values, including negative-zero
+underflow, array layouts, converted types, nonmutation and rejection errors.
+This affects Python single-sample and batch updates. Compiled updates and
+validation-loss calculations bypass this helper and are unaffected.
+
+In py12_df_aocl with NumPy 2.5.2 and one native thread, 14 derivative cases
+covered Python and zero-dimensional scalars, empty arrays, and vectors of
+length 4, 64 and 4,096 with none, all or mixed margins above the threshold.
+Each case had six alternating paired timing blocks with fixed call counts.
+All 84 pairs were faster; case means used 1.57–19.54% less time.
+
+Six complete Python-fit cases covered linear, kernel and two-stage estimators
+with batch sizes 1 and 4, 16 observations, eight features and three fixed
+epochs. Each of six paired blocks contained eight fresh fits. All six mean
+times improved by 0.06–1.24%, but 14 of 36 individual pairs were slower and
+timing order materially affected the small differences. These results do not
+establish a reproducible regression or a substantial full-fit acceleration.
+Every timed fitted model matched exact non-timing state, scores and labels;
+inputs remained unchanged. These are implementation timings on fixed inputs,
+not new CV repetitions or an accuracy study.
+
+The change adds one local variable, with no new API, branch, compatibility
+path or native build. It removes a repeated allocation and copy; lower peak
+memory is not claimed because the temporary stays live through validation.
+The benchmark evidence supports a modest optimization of the Python path.
+
 # Development verification — direct native linear row access
 
 On October 4, 2026, direct native linear row access passed **593 tests and

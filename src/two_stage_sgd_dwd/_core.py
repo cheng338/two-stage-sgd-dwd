@@ -75,7 +75,8 @@ def dwd_loss_derivative(u: ArrayLike) -> float | NDArray[np.float64]:
     result = np.full_like(margins, -1.0)
     upper = margins > 0.5
     with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
-        result[upper] = (-0.25 / margins[upper]) / margins[upper]
+        upper_margins = margins[upper]
+        result[upper] = (-0.25 / upper_margins) / upper_margins
     _finite_result(result, "DWD derivative")
     return float(result) if margins.ndim == 0 else result
 
