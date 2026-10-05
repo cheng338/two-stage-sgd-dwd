@@ -10,6 +10,7 @@ import argparse
 from dataclasses import asdict
 import hashlib
 import json
+import math
 import numbers
 import os
 from pathlib import Path
@@ -30,6 +31,110 @@ from _mnist_cv import FoldEvaluator, execution_identity
 
 _CONFIG_SCHEMA_VERSION = 4
 _PLAN_SCHEMA_VERSION = 3
+
+
+class SearchBusyError(RuntimeError):
+    """The search directory already has a coordinator, or cannot be locked."""
+
+
+class _RunLease:
+    """A non-inherited OS lease on a stable lockfile that is never removed."""
+    def __init__(self, path):
+        self.path, self.stream = Path(path), None
+
+    def __enter__(self):
+        descriptor = None
+        try:
+            descriptor = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
+            os.set_inheritable(descriptor, False)
+            self.stream = os.fdopen(descriptor, 'r+b', buffering=0)
+            descriptor = None
+            self.stream.seek(0)
+            if os.name == 'nt':
+                import msvcrt
+                msvcrt.locking(self.stream.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if os.fstat(self.stream.fileno()).st_size == 0:
+                self.stream.write(b'\0')
+        except BaseException as error:
+            if self.stream is not None:
+                self.stream.close()
+                self.stream = None
+            elif descriptor is not None:
+                os.close(descriptor)
+            if isinstance(error, OSError):
+                raise SearchBusyError('Search directory is busy or inaccessible: '
+                                      + str(self.path.parent)) from error
+            raise
+        return self
+
+    def __exit__(self, *args):
+        if self.stream is not None:
+            # Closing releases the OS lock, including during exception unwinding.
+            self.stream.close()
+            self.stream = None
+
+
+def _validate_records(records, *, expected_folds, execution_identity):
+    """Validate completed candidate evidence, including legitimate failures."""
+    attempted = set()
+    for number, record in enumerate(records):
+        prefix = f'Invalid candidate record {number}: '
+        required = {'params', 'eligible', 'mean_score', 'folds', 'execution_identity'}
+        if not isinstance(record, dict) or not required <= record.keys():
+            raise ValueError(prefix + 'missing candidate fields')
+        params = record['params']
+        if not isinstance(params, dict) or set(params) - {
+                'kernel', 'lambd', 'gamma', 'retention_fraction'}:
+            raise ValueError(prefix + 'invalid candidate parameters')
+        key = candidate_key(params)
+        if key in attempted:
+            raise ValueError('Saved search contains duplicate candidates')
+        attempted.add(key)
+        if record['execution_identity'] != execution_identity:
+            raise ValueError(prefix + 'execution identity differs from the saved run')
+        if not isinstance(record['eligible'], bool):
+            raise ValueError(prefix + 'eligible must be boolean')
+        folds = record['folds']
+        if not isinstance(folds, list) or len(folds) != expected_folds:
+            raise ValueError(prefix + 'incomplete fold evidence')
+        indices, scores, eligibility = [], [], []
+        for fold in folds:
+            if (not isinstance(fold, dict)
+                    or not {'fold', 'eligible', 'accuracy', 'status'} <= fold.keys()):
+                raise ValueError(prefix + 'missing fold fields')
+            index, eligible, score = fold['fold'], fold['eligible'], fold['accuracy']
+            if isinstance(index, bool) or not isinstance(index, numbers.Integral):
+                raise ValueError(prefix + 'invalid fold index')
+            indices.append(index)
+            if not isinstance(eligible, bool):
+                raise ValueError(prefix + 'fold eligibility must be boolean')
+            eligibility.append(eligible)
+            if eligible:
+                if (fold['status'] != 'trained' or isinstance(score, bool)
+                        or not isinstance(score, numbers.Real) or not math.isfinite(score)
+                        or not 0 <= score <= 1):
+                    raise ValueError(prefix + 'invalid eligible fold accuracy or status')
+                scores.append(float(score))
+            elif (score is not None or not isinstance(fold['status'], str)
+                  or not fold['status'] or fold['status'] == 'trained'):
+                raise ValueError(prefix + 'invalid failed fold accuracy or status')
+        if sorted(indices) != list(range(expected_folds)):
+            raise ValueError(prefix + 'fold indices must be unique and consecutive')
+        if record['eligible'] != all(eligibility):
+            raise ValueError(prefix + 'candidate eligibility disagrees with folds')
+        mean = record['mean_score']
+        if record['eligible']:
+            if (isinstance(mean, bool) or not isinstance(mean, numbers.Real)
+                    or not math.isfinite(mean) or not 0 <= mean <= 1
+                    or not math.isclose(float(mean), math.fsum(scores) / expected_folds,
+                                        rel_tol=1e-12, abs_tol=1e-12)):
+                raise ValueError(prefix + 'mean score disagrees with eligible folds')
+        elif mean is not None:
+            raise ValueError(prefix + 'failed candidates must have a null mean score')
+    return attempted
 
 
 def _verify_config_schema(config):
@@ -60,25 +165,31 @@ def balanced_indices(y, count, seed):
     return np.sort(selected)
 
 
-def read_records(path):
+def read_records(path, *, expected_folds, execution_identity, recover=True):
     original = path.read_bytes()
     raw = original.decode('utf-8')
     lines = raw.splitlines(keepends=True)
     records = []
+    interrupted = False
     for index, line in enumerate(lines):
         try:
             records.append(json.loads(line))
         except json.JSONDecodeError:
-            if index != len(lines)-1 or line.endswith('\n'):
+            if not recover or index != len(lines)-1 or line.endswith('\n'):
                 raise
-            backup = path.with_name('records-interrupted.jsonl')
-            if backup.exists():
-                raise ValueError('An interrupted-record backup already exists; review it before resuming')
-            backup.write_bytes(original)
-            temporary = path.with_suffix('.jsonl.tmp')
-            temporary.write_bytes(''.join(lines[:index]).encode('utf-8'))
-            temporary.replace(path)
-    if lines and len(records) == len(lines) and not lines[-1].endswith('\n'):
+            interrupted = True
+    # Never repair a tail until all preceding records are safe to reuse.
+    _validate_records(records, expected_folds=expected_folds,
+                      execution_identity=execution_identity)
+    if interrupted:
+        backup = path.with_name('records-interrupted.jsonl')
+        if backup.exists():
+            raise ValueError('An interrupted-record backup already exists; review it before resuming')
+        backup.write_bytes(original)
+        temporary = path.with_suffix('.jsonl.tmp')
+        temporary.write_bytes(''.join(lines[:-1]).encode('utf-8'))
+        temporary.replace(path)
+    if recover and lines and len(records) == len(lines) and not lines[-1].endswith('\n'):
         # The JSON object can be complete even if its trailing newline was
         # interrupted. Separate it from the next append without dropping it.
         temporary = path.with_suffix('.jsonl.tmp')
@@ -146,6 +257,11 @@ def load_qualified_selection(directory):
     reserved partition and the recorded settings without tuning on that data.
     """
     directory = Path(directory)
+    with _RunLease(directory / '.run.lock'):
+        return _load_qualified_selection_locked(directory)
+
+
+def _load_qualified_selection_locked(directory):
     config = json.loads((directory / 'config.json').read_text(encoding='utf-8'))
     _verify_config_schema(config)
     status = json.loads((directory / 'status.json').read_text(encoding='utf-8'))
@@ -158,6 +274,10 @@ def load_qualified_selection(directory):
     for name, expected in locked['evidence_sha256'].items():
         if _file_hash(directory / name) != expected:
             raise ValueError(f'Qualified selection evidence differs: {name}')
+    records = read_records(directory / 'records.jsonl', expected_folds=config['folds'],
+                           execution_identity=config['execution_identity'], recover=False)
+    if not ordered_eligible(records, expected_folds=config['folds']):
+        raise ValueError('Qualified selection requires eligible candidate evidence')
     selection = json.loads((directory / 'selection.json').read_text(encoding='utf-8'))
     if (selection.get('state') != 'accepted' or selection['review_reasons']
             or not selection.get('eligible_candidates')
@@ -233,180 +353,188 @@ def run_search(args, *, param_grid=None):
         'implementation_sha256': {name: hashlib.sha256(content).hexdigest()
                                   for name, content in implementation_bytes.items()}}
     out = Path(args.output_dir)
-    if args.resume:
-        saved = json.loads((out / 'config.json').read_text(encoding='utf-8'))
-        _verify_config_schema(saved)
-        if saved != config:
-            raise ValueError('Resume configuration, implementation, runtime or input data differs from the saved run')
-        if json.loads((out / 'splits.json').read_text(encoding='utf-8')) != split_payload:
-            raise ValueError('Resume observation IDs or folds differ from the saved split')
-        verify_implementation_snapshot(out / 'implementation-snapshot', config['implementation_sha256'])
-        plan = json.loads((out / 'plan_state.json').read_text(encoding='utf-8'))
-        if plan.get('schema_version') != _PLAN_SCHEMA_VERSION:
-            raise ValueError('Unsupported saved search plan schema; start a fresh output directory '
-                             'for exact parameter identities.')
-        if (not isinstance(plan.get('policy_state'), dict)
-                or not isinstance(plan.get('completed'), bool)):
-            raise ValueError('Invalid saved search phase in plan_state.json')
-        if (plan['policy_state'] and
-                plan['policy_state'].get('schema_version') != POLICY_STATE_SCHEMA_VERSION):
-            raise ValueError('Unsupported saved search policy schema; start a fresh output directory '
-                             'for exact parameter identities.')
-        records = read_records(out / 'records.jsonl')
-        stages = json.loads((out / 'stages.json').read_text(encoding='utf-8'))
-        if plan['completed']:
-            result = json.loads((out / 'selection.json').read_text(encoding='utf-8'))
-            if result['records_sha256'] != _file_hash(out / 'records.jsonl'):
-                raise ValueError('Completed search records differ from the saved selection')
-            if result['state'] == 'accepted':
-                load_qualified_selection(out)
-            elif result['state'] != 'needs_review':
-                raise ValueError('Invalid completed search state')
-            return result
-    else:
+    if not args.resume:
         out.mkdir(parents=True, exist_ok=False)
-        records, stages = [], []
-        snapshot = out / 'implementation-snapshot'
-        snapshot.mkdir()
-        for name, content in implementation_bytes.items():
-            (snapshot / name).write_bytes(content)
-        verify_implementation_snapshot(snapshot, config['implementation_sha256'])
-        write_json(out / 'config.json', config)
-        write_json(out / 'splits.json', split_payload)
-        (out / 'records.jsonl').write_text('', encoding='utf-8')
-        write_json(out / 'stages.json', stages)
-        plan = {'schema_version': _PLAN_SCHEMA_VERSION, 'policy_state': {},
-                'phase': 'coarse', 'completed': False}
-        write_json(out / 'plan_state.json', plan)
-    attempted = {candidate_key(record['params']) for record in records}
-    if len(attempted) != len(records):
-        raise ValueError('Saved search contains duplicate candidates')
-    # A crash can occur after the last candidate append but before the stage
-    # mirror is updated. The policy's saved pending stage still grants credit
-    # once; repair only the mirror from the committed candidate evidence.
-    for stage in stages:
-        if not stage['completed'] and all(candidate_key(p) in attempted for p in stage['candidates']):
-            stage['completed'] = True
-            ranked = ordered_eligible(records, expected_folds=args.folds)
-            stage['score_after'] = ranked[0]['mean_score'] if ranked else None
-    write_json(out / 'stages.json', stages)
-    evaluator = FoldEvaluator(X, y, ids, folds, max_epochs=args.epochs,
-                              random_state=args.random_state, batch_size=1,
-                              **execution_controls)
-
-    def rank():
-        return ordered_eligible(records, expected_folds=args.folds)
-
-    def evaluate_candidate(stage, params):
-        try:
-            record = evaluator.evaluate(params)
-            if record.get('execution_identity') != native_identity:
-                raise ValueError('Evaluator execution identity differs from the saved run')
-            return record
-        except (Exception, KeyboardInterrupt, SystemExit) as exc:
-            failure = {'stage': stage, 'params': dict(params),
-                       'error_type': type(exc).__name__, 'message': str(exc),
-                       'completed_candidates': len(records)}
-            write_json(out / 'failure.json', failure)
-            state = 'interrupted' if isinstance(exc, (KeyboardInterrupt, SystemExit)) else 'failed'
-            write_json(out / 'status.json', {'state': state, **failure,
-                       'final_evaluation_eligible': False, 'final_refit_performed': False,
-                       'held_out_scored': False, 'official_test_partition_loaded': False})
-            raise
-
-    def evaluate_stage(name, proposals):
-        existing = next((stage for stage in stages if stage['name'] == name), None)
-        if existing is None:
-            prior = rank()
-            existing = {'name': name, 'candidates': proposals, 'completed': False,
-                        'score_before': prior[0]['mean_score'] if prior else None}
-            stages.append(existing)
+    with _RunLease(out / '.run.lock'):
+        if args.resume:
+            saved = json.loads((out / 'config.json').read_text(encoding='utf-8'))
+            _verify_config_schema(saved)
+            if saved != config:
+                raise ValueError('Resume configuration, implementation, runtime or input data differs from the saved run')
+            if json.loads((out / 'splits.json').read_text(encoding='utf-8')) != split_payload:
+                raise ValueError('Resume observation IDs or folds differ from the saved split')
+            verify_implementation_snapshot(out / 'implementation-snapshot', config['implementation_sha256'])
+            plan = json.loads((out / 'plan_state.json').read_text(encoding='utf-8'))
+            if plan.get('schema_version') != _PLAN_SCHEMA_VERSION:
+                raise ValueError('Unsupported saved search plan schema; start a fresh output directory '
+                                 'for exact parameter identities.')
+            if (not isinstance(plan.get('policy_state'), dict)
+                    or not isinstance(plan.get('completed'), bool)):
+                raise ValueError('Invalid saved search phase in plan_state.json')
+            if (plan['policy_state'] and
+                    plan['policy_state'].get('schema_version') != POLICY_STATE_SCHEMA_VERSION):
+                raise ValueError('Unsupported saved search policy schema; start a fresh output directory '
+                                 'for exact parameter identities.')
+            records = read_records(out / 'records.jsonl', expected_folds=args.folds,
+                                   execution_identity=native_identity)
+            stages = json.loads((out / 'stages.json').read_text(encoding='utf-8'))
+            if plan['completed']:
+                result = json.loads((out / 'selection.json').read_text(encoding='utf-8'))
+                if result['records_sha256'] != _file_hash(out / 'records.jsonl'):
+                    raise ValueError('Completed search records differ from the saved selection')
+                if result['state'] == 'accepted':
+                    _load_qualified_selection_locked(out)
+                elif result['state'] != 'needs_review':
+                    raise ValueError('Invalid completed search state')
+                return result
+        else:
+            records, stages = [], []
+            snapshot = out / 'implementation-snapshot'
+            snapshot.mkdir()
+            for name, content in implementation_bytes.items():
+                (snapshot / name).write_bytes(content)
+            verify_implementation_snapshot(snapshot, config['implementation_sha256'])
+            write_json(out / 'config.json', config)
+            write_json(out / 'splits.json', split_payload)
+            (out / 'records.jsonl').write_text('', encoding='utf-8')
             write_json(out / 'stages.json', stages)
-        elif not set(candidate_key(p) for p in proposals).issubset(
-                candidate_key(p) for p in existing['candidates']):
-            raise ValueError('Pending policy candidates disagree with the saved stage')
-        for params in proposals:
-            key = candidate_key(params)
-            if key in attempted:
-                continue
-            start = time.perf_counter()
-            record = evaluate_candidate(name, params)
-            if candidate_key(record['params']) != key:
-                raise ValueError('Evaluator returned a different parameter candidate')
-            record.update(stage=name, elapsed_seconds_not_a_benchmark=time.perf_counter()-start)
-            with (out / 'records.jsonl').open('a', encoding='utf-8') as stream:
-                stream.write(json.dumps(record, allow_nan=False) + '\n')
-                stream.flush()
-                os.fsync(stream.fileno())
-            records.append(record)
-            attempted.add(key)
-            ranked = rank()
-            status = {'state': 'running', 'stage': name, 'completed_candidates': len(records),
-                      'best_mean_accuracy': ranked[0]['mean_score'] if ranked else None,
-                      'final_evaluation_eligible': False, 'final_refit_performed': False,
-                      'held_out_scored': False, 'official_test_partition_loaded': False}
-            write_json(out / 'status.json', status)
-            if len(records) % 10 == 0:
-                print(json.dumps(status), flush=True)
-        existing['completed'] = True
-        ranked = rank()
-        existing['score_after'] = ranked[0]['mean_score'] if ranked else None
-        write_json(out / 'stages.json', stages)
-
-    with threadpool_limits(args.threads):
-        control_path = out / 'inherited-default-control.json'
-        if not control_path.exists():
-            control = evaluate_candidate('inherited-default-control',
-                {'kernel': 'rbf', 'lambd': 1e-6, 'gamma': 'scale', 'retention_fraction': .3})
-            write_json(control_path, control)
-        while True:
-            proposal = next_search_stage(records, grid, policy, plan['policy_state'])
-            plan.update(policy_state=proposal['state'], phase=proposal['phase'])
+            plan = {'schema_version': _PLAN_SCHEMA_VERSION, 'policy_state': {},
+                    'phase': 'coarse', 'completed': False}
             write_json(out / 'plan_state.json', plan)
-            if proposal['review'] is not None:
-                review = proposal['review']
-                break
-            evaluate_stage(proposal['phase'], proposal['candidates'])
+        attempted = {candidate_key(record['params']) for record in records}
+        # A crash can occur after the last candidate append but before the stage
+        # mirror is updated. The policy's saved pending stage still grants credit
+        # once; repair only the mirror from the committed candidate evidence.
+        for stage in stages:
+            if not stage['completed'] and all(candidate_key(p) in attempted for p in stage['candidates']):
+                stage['completed'] = True
+                ranked = ordered_eligible(records, expected_folds=args.folds)
+                stage['score_after'] = ranked[0]['mean_score'] if ranked else None
+        write_json(out / 'stages.json', stages)
+        evaluator = FoldEvaluator(X, y, ids, folds, max_epochs=args.epochs,
+                                  random_state=args.random_state, batch_size=1,
+                                  **execution_controls)
 
-        state = plan['policy_state']
-        ranked = rank()
-        accepted = review['state'] == 'accepted'
-        selection = {
-            'state': review['state'], 'params': ranked[0]['params'] if ranked else None,
-            'mean_cv_accuracy': ranked[0]['mean_score'] if ranked else None,
-            'eligible_candidates': len(ranked), 'attempted_candidates': len(records),
-            'review_reasons': review['reasons'], 'stopping_reason': review['stopping_reason'],
-            'winner_bracket': state.get('winner_bracket'),
-            'boundary_issues': state.get('boundary_issues', []),
-            'boundary_plateau_evidence': state.get('boundary_plateau_evidence', []),
-            'expansion_rounds': state.get('expansion_rounds', 0),
-            'refinement_rounds': state.get('refinement_rounds', 0),
-            'stable_refinement_rounds': state.get('stable_rounds', 0),
-            'scope': 'training-only adaptive selection at the recorded SGD budget and fixed retention choices',
-            'optimization_convergence_established': False, 'global_optimum_established': False,
-            'final_evaluation_eligible': accepted, 'final_refit_performed': False,
-            'held_out_scored': False, 'official_test_partition_loaded': False,
-            'larger_budget_and_seed_confirmation_recommended': True,
-            'records_sha256': _file_hash(out / 'records.jsonl')}
-        write_json(out / 'selection.json', selection)
-        write_json(out / 'review.json', {**review, 'final_evaluation_eligible': accepted,
-                   'winner_bracket': selection['winner_bracket'],
-                   'stable_refinement_rounds': selection['stable_refinement_rounds']})
-        if accepted:
-            _verify_execution_identity(config)
-            locked = {'params': selection['params'], 'epochs': args.epochs,
-                      'sampling': 'with_replacement', 'batch_size': 1, 'stopping': 'fixed',
-                      'random_state': args.random_state, 'preprocessing': config['preprocessing'],
-                      'package_version': config['package_version'],
-                      **execution_controls, 'execution_identity': native_identity,
-                      'evidence_sha256': {name: _file_hash(out / name) for name in
-                          ('config.json', 'splits.json', 'records.jsonl', 'selection.json', 'review.json')}}
-            write_json(out / 'qualified-selection.json', locked)
-        write_json(out / 'status.json', selection)
-        plan.update(phase='completed', completed=True)
-        write_json(out / 'plan_state.json', plan)
-        print(json.dumps(selection), flush=True)
-    return selection
+        def rank():
+            return ordered_eligible(records, expected_folds=args.folds)
+
+        def evaluate_candidate(stage, params):
+            try:
+                record = evaluator.evaluate(params)
+                if not isinstance(record, dict):
+                    raise ValueError('Invalid candidate record: evaluator must return a dictionary')
+                if record.get('execution_identity') != native_identity:
+                    raise ValueError('Evaluator execution identity differs from the saved run')
+                if stage != 'inherited-default-control':
+                    _validate_records([record], expected_folds=args.folds,
+                                      execution_identity=native_identity)
+                return record
+            except (Exception, KeyboardInterrupt, SystemExit) as exc:
+                failure = {'stage': stage, 'params': dict(params),
+                           'error_type': type(exc).__name__, 'message': str(exc),
+                           'completed_candidates': len(records)}
+                write_json(out / 'failure.json', failure)
+                state = 'interrupted' if isinstance(exc, (KeyboardInterrupt, SystemExit)) else 'failed'
+                write_json(out / 'status.json', {'state': state, **failure,
+                           'final_evaluation_eligible': False, 'final_refit_performed': False,
+                           'held_out_scored': False, 'official_test_partition_loaded': False})
+                raise
+
+        def evaluate_stage(name, proposals):
+            existing = next((stage for stage in stages if stage['name'] == name), None)
+            if existing is None:
+                prior = rank()
+                existing = {'name': name, 'candidates': proposals, 'completed': False,
+                            'score_before': prior[0]['mean_score'] if prior else None}
+                stages.append(existing)
+                write_json(out / 'stages.json', stages)
+            elif not set(candidate_key(p) for p in proposals).issubset(
+                    candidate_key(p) for p in existing['candidates']):
+                raise ValueError('Pending policy candidates disagree with the saved stage')
+            for params in proposals:
+                key = candidate_key(params)
+                if key in attempted:
+                    continue
+                start = time.perf_counter()
+                record = evaluate_candidate(name, params)
+                if candidate_key(record['params']) != key:
+                    raise ValueError('Evaluator returned a different parameter candidate')
+                record.update(stage=name, elapsed_seconds_not_a_benchmark=time.perf_counter()-start)
+                with (out / 'records.jsonl').open('a', encoding='utf-8') as stream:
+                    stream.write(json.dumps(record, allow_nan=False) + '\n')
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                records.append(record)
+                attempted.add(key)
+                ranked = rank()
+                status = {'state': 'running', 'stage': name, 'completed_candidates': len(records),
+                          'best_mean_accuracy': ranked[0]['mean_score'] if ranked else None,
+                          'final_evaluation_eligible': False, 'final_refit_performed': False,
+                          'held_out_scored': False, 'official_test_partition_loaded': False}
+                write_json(out / 'status.json', status)
+                if len(records) % 10 == 0:
+                    print(json.dumps(status), flush=True)
+            existing['completed'] = True
+            ranked = rank()
+            existing['score_after'] = ranked[0]['mean_score'] if ranked else None
+            write_json(out / 'stages.json', stages)
+
+        with threadpool_limits(args.threads):
+            control_path = out / 'inherited-default-control.json'
+            if not control_path.exists():
+                control = evaluate_candidate('inherited-default-control',
+                    {'kernel': 'rbf', 'lambd': 1e-6, 'gamma': 'scale', 'retention_fraction': .3})
+                write_json(control_path, control)
+            while True:
+                proposal = next_search_stage(records, grid, policy, plan['policy_state'])
+                plan.update(policy_state=proposal['state'], phase=proposal['phase'])
+                write_json(out / 'plan_state.json', plan)
+                if proposal['review'] is not None:
+                    review = proposal['review']
+                    break
+                evaluate_stage(proposal['phase'], proposal['candidates'])
+
+            state = plan['policy_state']
+            _validate_records(records, expected_folds=args.folds,
+                              execution_identity=native_identity)
+            ranked = rank()
+            accepted = review['state'] == 'accepted'
+            selection = {
+                'state': review['state'], 'params': ranked[0]['params'] if ranked else None,
+                'mean_cv_accuracy': ranked[0]['mean_score'] if ranked else None,
+                'eligible_candidates': len(ranked), 'attempted_candidates': len(records),
+                'review_reasons': review['reasons'], 'stopping_reason': review['stopping_reason'],
+                'winner_bracket': state.get('winner_bracket'),
+                'boundary_issues': state.get('boundary_issues', []),
+                'boundary_plateau_evidence': state.get('boundary_plateau_evidence', []),
+                'expansion_rounds': state.get('expansion_rounds', 0),
+                'refinement_rounds': state.get('refinement_rounds', 0),
+                'stable_refinement_rounds': state.get('stable_rounds', 0),
+                'scope': 'training-only adaptive selection at the recorded SGD budget and fixed retention choices',
+                'optimization_convergence_established': False, 'global_optimum_established': False,
+                'final_evaluation_eligible': accepted, 'final_refit_performed': False,
+                'held_out_scored': False, 'official_test_partition_loaded': False,
+                'larger_budget_and_seed_confirmation_recommended': True,
+                'records_sha256': _file_hash(out / 'records.jsonl')}
+            write_json(out / 'selection.json', selection)
+            write_json(out / 'review.json', {**review, 'final_evaluation_eligible': accepted,
+                       'winner_bracket': selection['winner_bracket'],
+                       'stable_refinement_rounds': selection['stable_refinement_rounds']})
+            if accepted:
+                _verify_execution_identity(config)
+                locked = {'params': selection['params'], 'epochs': args.epochs,
+                          'sampling': 'with_replacement', 'batch_size': 1, 'stopping': 'fixed',
+                          'random_state': args.random_state, 'preprocessing': config['preprocessing'],
+                          'package_version': config['package_version'],
+                          **execution_controls, 'execution_identity': native_identity,
+                          'evidence_sha256': {name: _file_hash(out / name) for name in
+                              ('config.json', 'splits.json', 'records.jsonl', 'selection.json', 'review.json')}}
+                write_json(out / 'qualified-selection.json', locked)
+            write_json(out / 'status.json', selection)
+            plan.update(phase='completed', completed=True)
+            write_json(out / 'plan_state.json', plan)
+            print(json.dumps(selection), flush=True)
+        return selection
 
 
 def main(argv=None):

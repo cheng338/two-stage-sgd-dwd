@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Prevent overlapping adaptive MNIST coordinators from modifying the same
+  output directory, and hold the operating-system lock through resume and
+  qualified-selection export. Validate unique candidate records and complete
+  fold evidence before saving or reusing them, including completed searches.
 - Preserve normalized floating-point coordinates in the adaptive MNIST
   example and use exact candidate identities instead of 15-digit rounding.
   Keep distinct nearby values as separate candidates, and require a fresh

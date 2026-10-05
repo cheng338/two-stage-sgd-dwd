@@ -222,6 +222,17 @@ this alignment does not establish 30% as the best-performing retention.
 default is unlimited within the candidate budget. Saved folds, settings,
 implementation snapshots, candidate records, and policy state support
 `--resume` only with matching settings, recorded runtime versions, and data.
+One coordinator at a time may use an output directory, including completed
+resume and qualified-selection export. A nonblocking operating-system lock
+rejects overlapping access; different output directories remain independent.
+The `.run.lock` file stays in place and does not itself indicate a live run.
+Process exit or interruption releases its lock; do not delete the file to
+force access. Saved and newly evaluated candidate records must have unique
+exact parameter identities and consistent complete fold evidence. Legitimate
+failed folds remain recorded and ineligible for selection.
+Resume and qualified-selection loading require writable access to the lockfile
+(and to its directory when creating it). Use a writable copy of a read-only
+archive; inaccessible locks fail closed instead of permitting unlocked access.
 The adaptive example preserves normalized floating-point parameter values and
 uses exact candidate identities; nearby values are not rounded into one
 candidate. This can increase the number of candidates relative to older
