@@ -663,6 +663,7 @@ class KernelSGDDWD(_BaseDWD):
     def _decision_function_with_backend(self, X, backend=None):
         """Apply a prediction choice without changing fitted model state."""
         check_is_fitted(self)
+        _integer(self.prediction_batch_size, "prediction_batch_size")
         X = validate_data(self, X, reset=False, dtype=np.float64, accept_sparse=False)
         backend = _prediction_backend(self) if backend is None else backend
         if self._kernel_spec_.kernel == "rbf" and self.gamma_ > 0:
@@ -676,6 +677,7 @@ class KernelSGDDWD(_BaseDWD):
     def rkhs_norm_squared(self):
         """Compute a^T K a in blocks; this optional diagnostic costs O(m^2 d)."""
         check_is_fitted(self)
+        _integer(self.prediction_batch_size, "prediction_batch_size")
         Ka = _scores("kernel", self.basis_, self.dual_coef_[0], 0.0,
                      self.basis_, self.gamma_, self.prediction_batch_size,
                      kernel_spec=self._kernel_spec_)

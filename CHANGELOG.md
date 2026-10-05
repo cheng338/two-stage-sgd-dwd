@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Validate prediction block sizes after fitting, including in the standalone
+  RKHS-norm diagnostic. Reject invalid sizes before scoring can return
+  unwritten output, and preserve valid predictions and fitted model state.
+
 ## 0.8.0 - 2026-10-05
 
 - Call BLAS directly for ordinary float64 dot products in the compiled scalar
