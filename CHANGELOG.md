@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Support Python 3.10 with portable builds and a version-specific CPython 3.10
+  native extension. Retain the Python 3.11 stable ABI for native builds on
+  Python 3.11 and newer, with the same strict arithmetic and SGD implementation.
 - Bind adaptive MNIST resumes and screening-cache reuse to the loaded numerical
   runtime, including scientific extension hashes, BLAS/OpenMP implementations,
   library hashes and active thread counts. Capture provenance under the same

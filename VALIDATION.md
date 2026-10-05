@@ -1,3 +1,20 @@
+# Python 3.10 build compatibility
+
+On October 5, 2026, Windows AMD64 builds were checked with CPython 3.10.12,
+NumPy 2.2.6, SciPy 1.15.3, scikit-learn 1.7.0, joblib 1.5.1 and threadpoolctl
+3.6.0. The native wheel uses the `cp310-cp310-win_amd64` tag and links against
+the Python 3.10 runtime. The portable wheel uses `py3-none-any` and contains no
+compiled extension. Both declare Python 3.10 or newer.
+
+The same source was also rebuilt on CPython 3.12.14, retaining the
+`cp311-abi3-win_amd64` native-wheel tag. Both native builds imported successfully
+and enabled the guarded SciPy BLAS adapter. Strict arithmetic compiler flags
+and the optimizer implementation are unchanged. Python 3.10 uses its full C
+API because the buffer interface used by the optimizer entered the stable ABI
+in Python 3.11; a Python 3.11 stable-ABI binary is not repackaged for Python 3.10.
+These build checks were performed on Windows, without claiming validation of
+an operating system from matching dependency versions alone.
+
 # Development evidence — direct BLAS calls in native fitting
 
 On October 5, 2026, the guarded direct-BLAS adapter was compared with the

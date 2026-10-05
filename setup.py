@@ -26,10 +26,12 @@ class StrictBuildExt(build_ext):
                 target = Path(self.get_ext_fullpath(extension.name)).resolve()
                 target.parent.mkdir(parents=True, exist_ok=True)
                 # A win_amd64 wheel must also run on baseline x86-64 hardware.
+                library = ("python3.lib" if extension.py_limited_api else
+                           f"python{sys.version_info.major}{sys.version_info.minor}.lib")
                 command = [zig, "cc", *flags, "-march=x86_64", "-s", "-shared",
-                           "-DPy_LIMITED_API=0x030B0000",
+                           *[f"-D{name}={value}" for name, value in extension.define_macros],
                            "-I" + sysconfig.get_path("include"),
-                           str(Path(sys.base_prefix) / "libs/python3.lib"),
+                           str(Path(sys.base_prefix) / "libs" / library),
                            *extension.sources, "-o", str(target)]
                 subprocess.run(command, check=True)
                 for stem in (target.stem, "sgd_accel"):
@@ -49,13 +51,16 @@ build_accel = os.environ.get("SGD_BUILD_ACCEL", "1")
 if build_accel not in ("0", "1"):
     raise RuntimeError("SGD_BUILD_ACCEL must be 0 (portable) or 1 (optional native).")
 portable = build_accel == "0"
+# Py_buffer is part of the stable ABI starting with Python 3.11. Python 3.10
+# uses its own full-API extension instead of claiming an incompatible abi3 tag.
+limited_api = sys.version_info >= (3, 11)
 extensions = [] if portable else [Extension(
     "two_stage_sgd_dwd._sgd_accel",
     sources=["src/two_stage_sgd_dwd/sgd_accel.c"],
-    define_macros=[("Py_LIMITED_API", "0x030B0000")],
-    py_limited_api=True,
+    define_macros=[("Py_LIMITED_API", "0x030B0000")] if limited_api else [],
+    py_limited_api=limited_api,
     libraries=[] if sys.platform == "win32" else ["m"],
     optional=True,
 )]
 setup(ext_modules=extensions, cmdclass={"build_ext": StrictBuildExt},
-      options={} if portable else {"bdist_wheel": {"py_limited_api": "cp311"}})
+      options={"bdist_wheel": {"py_limited_api": "cp311"}} if limited_api and not portable else {})

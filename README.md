@@ -28,7 +28,7 @@ accompanying his dissertation. The two-stage method follows Chapter 3,
 
 # Installation
 
-Python 3.11 or newer is required. From this source directory:
+Python 3.10 or newer is required. From this source directory:
 
 ```console
 python -m pip install .
@@ -47,6 +47,10 @@ environment variable `SGD_BUILD_ACCEL=0` requests a portable Python-only build.
 The Python backend remains the default in either distribution. Native binary
 availability depends on the operating system and architecture; see
 [backend and cache details](docs/optimizer-backends.md).
+Native builds on CPython 3.10 use its version-specific ABI. Builds on CPython
+3.11 and newer retain the Python 3.11 stable ABI (`cp311-abi3`). A Python 3.11
+stable-ABI wheel cannot be installed on Python 3.10; that interpreter needs a
+matching native build or the portable distribution.
 
 # Example
 
