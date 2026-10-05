@@ -27,7 +27,8 @@ For kernel fits, native execution supports `linear`, `rbf`, `poly`,
 parameter validation still applies. Callables, `sigmoid`, and `additive_chi2`
 remain available through Python; `"auto"` records the fallback.
 
-The native loop uses NumPy's dot product and the scalar update operation order.
+The native loop retains the scalar update operation order and uses the guarded
+dot-product path described below.
 It prepares at most one epoch of observation indices and learning rates at a
 time. On NumPy 2.5.2, an exact built-in `Generator` using `PCG64`, `PCG64DXSM`,
 `Philox`, `SFC64`, or `MT19937` prepares replacement indices with one array
@@ -62,6 +63,35 @@ The two-stage model passes the requested setting to both components and stores
 their diagnostics in `stage_diagnostics_`. Its top-level backend is `"mixed"`
 when the components use different paths, and its top-level reason is a mapping
 with `linear` and `kernel` entries.
+
+## Direct BLAS calls in native fitting
+
+For ordinary contiguous, aligned float64 vectors, the compiled optimizer can
+call BLAS directly through SciPy's `cython_blas` interface. This removes the
+Python dispatch and scalar conversion around each margin or projection-norm
+dot product. It uses the existing SciPy dependency and requires no particular
+BLAS vendor. The update formulas, learning rates, sampling, and kernel-column
+calculations retain their existing paths.
+
+The adapter requires a recognized LP64 C interface, the canonical NumPy dot
+dispatcher, exact NumPy arrays, and a vector length representable by that
+interface. Missing or unsupported interfaces, replaced dispatchers, and array
+subclasses retain the captured NumPy dot call. A direct result with a numerical
+exception flag or a nonfinite value is recomputed through NumPy, preserving
+its warning, callback, logging, and exception policies and the committed update
+prefix. This numerical fallback does not retry a fit or change its backend.
+
+Fixed-budget MNIST comparisons found approximately 37% less complete fitting
+time under both AOCL and MKL, with identical tested parameters and predictions.
+That is an observed result, not a bitwise-equivalence guarantee across numerical
+libraries. Inputs near `1e-160` repeatedly triggered fallback and were 16–19%
+slower in a small linear control. See [validation results](../VALIDATION.md).
+
+Direct C calls retain the GIL and bypass any internal NumPy GIL release. A
+native epoch can therefore hold it continuously; threaded responsiveness and
+concurrent-training throughput have not been benchmarked. The native loop
+returns to Python between epochs. This optimization is independent of
+`prediction_backend` and applies only when the compiled optimizer is selected.
 
 ## Lazy kernel-column cache
 
@@ -103,7 +133,7 @@ retain their separate meanings.
 For linear fitting, a compatible native extension retrieves each selected
 row directly from the existing tuple of row views. This avoids creating a
 Python index and calling a bound method for each update. The same row object
-passes through the existing buffer checks, NumPy dot product and scalar
+passes through the existing buffer checks, guarded dot-product call and scalar
 update. Rows are still checked when selected, and failure recovery is unchanged.
 Older extensions retain callable row access through capability detection;
 kernel loaders and custom callable providers keep their existing path. Private

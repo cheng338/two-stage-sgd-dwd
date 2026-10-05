@@ -3,11 +3,66 @@
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
+#include <limits.h>
+#include <fenv.h>
 
-/* Keep NumPy's dot implementation and strict, separate scalar operations. */
+/* Retain NumPy dispatch unless a known SciPy C wrapper is usable. */
+typedef double (*DDotFunction)(int *, double *, int *, double *, int *);
 typedef struct {
     PyObject *dot_function, *copy_function, *empty_function, *ndarray_type;
+    PyObject *blas_module, *ddot_capsule;
+    DDotFunction ddot;
 } Functions;
+
+static int resolve_ddot(Functions *state) {
+    const char *signature = "__pyx_t_5scipy_6linalg_11cython_blas_d (int *, "
+        "__pyx_t_5scipy_6linalg_11cython_blas_d *, int *, "
+        "__pyx_t_5scipy_6linalg_11cython_blas_d *, int *)";
+    PyObject *multiarray = NULL, *canonical = NULL, *umath = NULL, *builtin = NULL;
+    PyObject *dispatcher = NULL, *wrapped = NULL, *blas = NULL, *api = NULL, *capsule = NULL;
+    int success = 1;
+    multiarray = PyImport_ImportModule("numpy._core.multiarray");
+    if (multiarray == NULL) goto optional_error;
+    canonical = PyObject_GetAttrString(multiarray, "dot");
+    if (canonical == NULL) goto optional_error;
+    if (canonical != state->dot_function) goto done;
+    umath = PyImport_ImportModule("numpy._core._multiarray_umath");
+    if (umath == NULL) goto optional_error;
+    dispatcher = PyObject_GetAttrString(umath, "_ArrayFunctionDispatcher");
+    if (dispatcher == NULL) goto optional_error;
+    if (!PyType_Check(dispatcher) || Py_TYPE(canonical) != (PyTypeObject *)dispatcher) goto done;
+    builtin = PyObject_GetAttrString(umath, "dot");
+    if (builtin == NULL) goto optional_error;
+    wrapped = PyObject_GetAttrString(canonical, "__wrapped__");
+    if (wrapped == NULL) goto optional_error;
+    if (wrapped != builtin || !PyCFunction_Check(builtin)) goto done;
+    blas = PyImport_ImportModule("scipy.linalg.cython_blas");
+    if (blas == NULL) goto optional_error;
+    api = PyObject_GetAttrString(blas, "__pyx_capi__");
+    if (api == NULL) goto optional_error;
+    if (!PyDict_CheckExact(api)) goto done;
+    capsule = PyDict_GetItemString(api, "ddot"); /* borrowed */
+    if (capsule == NULL || !PyCapsule_IsValid(capsule, signature)) goto done;
+    state->ddot = (DDotFunction)PyCapsule_GetPointer(capsule, signature);
+    if (state->ddot == NULL) goto optional_error;
+    state->blas_module = blas;
+    Py_INCREF(blas);
+    state->ddot_capsule = capsule;
+    Py_INCREF(capsule);
+    goto done;
+optional_error:
+    /* An absent/unsupported optional interface keeps ordinary NumPy dot.
+       Do not suppress memory exhaustion, interrupts, or unrelated failures. */
+    if (PyErr_ExceptionMatches(PyExc_ImportError) ||
+            PyErr_ExceptionMatches(PyExc_AttributeError) ||
+            PyErr_ExceptionMatches(PyExc_OSError)) PyErr_Clear();
+    else success = 0;
+done:
+    Py_XDECREF(multiarray); Py_XDECREF(canonical); Py_XDECREF(umath);
+    Py_XDECREF(dispatcher); Py_XDECREF(builtin); Py_XDECREF(wrapped);
+    Py_XDECREF(blas); Py_XDECREF(api);
+    return success;
+}
 
 static int vector_buffer(PyObject *object, Py_buffer *view, int integer, int writable) {
     int flags = PyBUF_FORMAT | PyBUF_ND | PyBUF_C_CONTIGUOUS | (writable ? PyBUF_WRITABLE : 0);
@@ -23,8 +78,24 @@ static int vector_buffer(PyObject *object, Py_buffer *view, int integer, int wri
     return 1;
 }
 
-static int numpy_dot(PyObject *function, PyObject *left, PyObject *right, double *value) {
-    PyObject *answer = PyObject_CallFunctionObjArgs(function, left, right, NULL);
+static int numpy_dot(Functions *functions, PyObject *left, PyObject *right,
+                     Py_buffer *left_view, Py_buffer *right_view, double *value) {
+    Py_ssize_t length = left_view->len / 8;
+    if (functions->ddot != NULL && length <= INT_MAX && length > 0 &&
+            right_view->len == left_view->len &&
+            Py_TYPE(left) == (PyTypeObject *)functions->ndarray_type &&
+            Py_TYPE(right) == (PyTypeObject *)functions->ndarray_type) {
+        int n = (int)length, increment = 1;
+        /* NumPy owns warning/callback/raise policy. Replay exceptional dots
+           through its captured function instead of bypassing that policy. */
+        if (feclearexcept(FE_ALL_EXCEPT) == 0) {
+            *value = functions->ddot(&n, (double *)left_view->buf, &increment,
+                                    (double *)right_view->buf, &increment);
+            int flags = fetestexcept(FE_DIVBYZERO | FE_INVALID | FE_OVERFLOW | FE_UNDERFLOW);
+            if (flags == 0 && isfinite(*value)) return !PyErr_Occurred();
+        }
+    }
+    PyObject *answer = PyObject_CallFunctionObjArgs(functions->dot_function, left, right, NULL);
     if (answer == NULL) return 0;
     *value = PyFloat_AsDouble(answer);
     Py_DECREF(answer);
@@ -97,7 +168,7 @@ static PyObject *run_steps(PyObject *self, PyObject *args) {
         if (!vector_buffer(row, &x, 0, 0)) goto cleanup;
         if (x.len != a.len) { PyErr_SetString(PyExc_ValueError, "Sampled vector has wrong length"); goto cleanup; }
         double dot, margin, q, multiplier, new_bias, shrink = 0;
-        if (!numpy_dot(functions->dot_function, current, row, &dot)) {
+        if (!numpy_dot(functions, current, row, &a, &x, &dot)) {
             if (take_numeric_error(&error)) goto numerical_end;
             goto cleanup;
         }
@@ -139,7 +210,7 @@ static PyObject *run_steps(PyObject *self, PyObject *args) {
             }
             if (scale > 1.0) for (Py_ssize_t j = 0; j < width; j++) next[j] /= scale;
             double squared_norm;
-            if (!numpy_dot(functions->dot_function, proposal, proposal, &squared_norm)) {
+            if (!numpy_dot(functions, proposal, proposal, &z, &z, &squared_norm)) {
                 if (take_numeric_error(&error)) goto numerical_end;
                 goto cleanup;
             }
@@ -178,19 +249,22 @@ cleanup:
 }
 
 static PyMethodDef methods[] = {
-    {"run_steps", run_steps, METH_VARARGS, "Execute ordered scalar updates using NumPy dot and strict arithmetic."},
+    {"run_steps", run_steps, METH_VARARGS, "Execute ordered scalar updates using guarded BLAS dot and strict arithmetic."},
     {NULL, NULL, 0, NULL}
 };
 static int module_traverse(PyObject *module, visitproc visit, void *arg) {
     Functions *state = (Functions *)PyModule_GetState(module);
     Py_VISIT(state->dot_function); Py_VISIT(state->copy_function); Py_VISIT(state->empty_function);
     Py_VISIT(state->ndarray_type);
+    Py_VISIT(state->blas_module); Py_VISIT(state->ddot_capsule);
     return 0;
 }
 static int module_clear(PyObject *module) {
     Functions *state = (Functions *)PyModule_GetState(module);
     Py_CLEAR(state->dot_function); Py_CLEAR(state->copy_function); Py_CLEAR(state->empty_function);
     Py_CLEAR(state->ndarray_type);
+    state->ddot = NULL;
+    Py_CLEAR(state->ddot_capsule); Py_CLEAR(state->blas_module);
     return 0;
 }
 static void module_free(void *module) { (void)module_clear((PyObject *)module); }
@@ -210,6 +284,10 @@ PyMODINIT_FUNC PyInit__sgd_accel(void) {
     state->ndarray_type = PyObject_GetAttrString(numpy, "ndarray");
     Py_DECREF(numpy);
     if (!state->dot_function || !state->copy_function || !state->empty_function || !state->ndarray_type) {
+        Py_DECREF(created); return NULL;
+    }
+    if (!resolve_ddot(state)) { Py_DECREF(created); return NULL; }
+    if (PyModule_AddIntConstant(created, "_uses_scipy_ddot", state->ddot != NULL) < 0) {
         Py_DECREF(created); return NULL;
     }
     if (PyModule_AddIntConstant(created, "_supports_tuple_rows", 1) < 0) {

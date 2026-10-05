@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Call BLAS directly for ordinary float64 dot products in the compiled scalar
+  optimizer through a guarded SciPy interface. Retain NumPy dispatch for
+  unsupported interfaces and custom arrays or hooks; replay exceptional dot
+  products through NumPy to preserve floating-point warnings and failures.
+  Preserve SGD updates, sampling, projection, selection, and lazy kernel reuse.
+  Document measured training gains and the underflow-heavy input slowdown.
+
 - Reuse independent epoch RNG snapshots for native fits using the verified
   NumPy 2.5.2 built-in generators, avoiding redundant deep copies. Preserve
   sampled streams, failed-update restoration and saved model states; retain

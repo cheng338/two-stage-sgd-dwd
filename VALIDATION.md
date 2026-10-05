@@ -1,3 +1,73 @@
+# Development evidence — direct BLAS calls in native fitting
+
+On October 5, 2026, the guarded direct-BLAS adapter was compared with the
+preceding native optimizer using the same 30 saved MNIST training draws:
+ten each for pairs 2–3, 4–9 and 3–8. Fresh complete fits included StandardScaler,
+both SGD stages, 800 epochs per stage, 30% retention and a 64 MiB lazy cache.
+Original seeds and statistical parameters were fixed; no tuning was repeated.
+Each environment used one native-library thread and alternating fit order,
+with one timed fit per variant per draw. Predictions used a common direct
+backend and were outside the fit timer.
+
+| Environment | Previous mean fit, s | Direct-BLAS mean fit, s | Time saved | Faster pairs |
+| --- | ---: | ---: | ---: | ---: |
+| `py12_df_aocl` | 4.0911 | 2.5612 | 37.39% | 29/30 |
+| `py12_df` | 4.3048 | 2.7127 | 36.98% | 30/30 |
+
+Both environments used Python 3.12.14, NumPy 2.5.2, SciPy 1.18.0 and
+scikit-learn 1.9.0 on the AMD 9955HX, with AOCL 5.2.0 or Intel MKL 2025.3.
+These separate sessions compare implementations within each environment;
+they do not establish a ranking of BLAS vendors.
+
+All 60 paired comparisons preserved exact fitted parameter bytes, selected
+rows, scores, labels, RNG states, update counts, and cache accounting within
+their environment. Every candidate reproduced the original study's labels.
+Test accuracy means and sample SDs across the ten training draws remained
+97.4633% ± 0.3984 percentage points for 2–3, 96.0472% ± 0.4505 for 4–9,
+and 96.5222% ± 0.2267 for 3–8. An independent audit recomputed summaries
+from saved arrays and checked source, binary, data, protocol and state hashes.
+
+The sole slower original MNIST observation was pair 4–9, draw 7: 4.2710 s
+versus 4.3875 s, a 2.73% increase. It remains in the table. Six alternating
+paired follow-up timings of that same draw averaged 3.9324 s versus 2.4387 s,
+with all six faster and exact results retained. The original slowdown's cause
+was not established; the follow-up did not replace its measurement.
+
+Eleven synthetic controls used six paired timings per case and environment,
+20 fixed epochs, and small, HDLSS, many-row, uncached, cached, duplicate and
+large-offset inputs. All 132 pairs preserved exact parameters, scores, labels,
+test DWD losses and controls. Ten case means improved in both environments,
+although individual small timings sometimes lost. The high-dimensional
+uncached kernel control gained only about 0.84%. A linear control with
+features around `1e-160` repeatedly triggered numerical fallback and took
+16.47% longer under AOCL and 18.96% longer under MKL, approximately
+2.01 → 2.35 ms and 1.99 → 2.37 ms. All twelve pairs in that control were slower.
+These fixed synthetic fixtures test implementation behavior, not statistical
+accuracy across independently sampled datasets.
+
+Before adoption, the exact guarded candidate passed the complete existing
+suite in each environment: **605 tests and 9,160 subtests**, with only the
+existing invalid-label warning. Additional checks passed 30 fresh-process
+interface, hook, import-error and numerical-policy cases per environment,
+plus 21 callback/logging/printing and pre-existing-flag cases. An earlier
+unguarded prototype failed numerical-policy checks, including committing an
+underflowing update that NumPy would reject; that prototype was not adopted.
+
+After adoption, the rebuilt binary matched the benchmarked binary byte for
+byte. The expanded package suite passed **613 tests and 9,160 subtests** in
+each native environment. The portable build passed **535 tests and 4,807
+subtests**, with 78 native-only skips. All three runs retained only the
+existing invalid-label warning. The eight added regression tests cover
+captured dot hooks, unsupported capsules, initialization errors, array
+subclasses and floating-point policies, including the underflow commit rule.
+
+The adapter preserves the methodology while changing how a scalar inner
+product is invoked. Floating-point equality is empirical, not promised for
+every NumPy/SciPy/BLAS build. Other platforms require their own validation.
+The direct C path can retain the GIL through a native epoch; Python-thread
+responsiveness and concurrent-training throughput were not measured.
+See [optimizer details](docs/optimizer-backends.md) for dispatch and fallback.
+
 # Development evidence — guarded BLAS prediction default
 
 New `KernelSGDDWD` and `TwoStageDWDClassifier` instances use

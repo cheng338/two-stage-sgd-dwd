@@ -256,7 +256,7 @@ shuffled = TwoStageDWDClassifier(
 
 The defaults are `batch_size=1, sampling="with_replacement"`, preserving the
 dissertation's single-point sampling policy. At fixed hyperparameters and
-seeds, the single-point update retains the earlier solver's arithmetic.
+seeds, the single-point update retains the earlier solver's formula and sequence.
 Independent uniform draws
 allow repeats and omissions within an epoch. An integer batch size equal
 to the fitting-set size is a random multiset, whereas `"full"` is the complete
@@ -308,6 +308,12 @@ All three estimators accept `optimizer_backend="python"` by default.
 otherwise uses Python. `"native"` requires the compiled optimizer: unsupported
 fitting controls raise `ValueError`, and an unavailable extension raises
 `ImportError`.
+
+The compiled optimizer uses guarded direct BLAS calls for eligible dot
+products, with NumPy fallback for unsupported interfaces and numerical
+exceptions. This training optimization is independent of `prediction_backend`.
+See [backend details](docs/optimizer-backends.md#direct-blas-calls-in-native-fitting)
+and [measured gains and limitations](VALIDATION.md).
 
 The native path requires `batch_size=1`, C-contiguous aligned feature arrays,
 and no `validation_data`, `checkpoint_callback`, or time limit. This includes
