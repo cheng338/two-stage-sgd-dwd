@@ -21,6 +21,8 @@ import numpy as np
 from sklearn.utils.multiclass import check_classification_targets, unique_labels
 from sklearn.utils.validation import check_array
 
+from _runtime_identity import runtime_identity
+
 from two_stage_sgd_dwd import KernelSGDDWD, LinearSGDDWD, SelectionError, TrainingError
 from two_stage_sgd_dwd import __version__ as _PACKAGE_VERSION
 from two_stage_sgd_dwd._core import _mean_finite_losses, dwd_loss, select_near_boundary
@@ -56,13 +58,15 @@ def execution_identity(optimizer_backend="python"):
     Python execution does not import or depend on an unused native extension.
     Auto/native identities bind the actually importable extension's bytes; an
     unavailable extension is an explicit auto fallback or a native-only error.
+    All backends also bind the loaded numerical runtime and its thread counts.
     The caller can persist this dictionary to reject incompatible resumes.
     """
     if not isinstance(optimizer_backend, str) or optimizer_backend not in ("python", "auto", "native"):
         raise ValueError("optimizer_backend must be 'python', 'auto', or 'native'")
     result = {"requested_backend": optimizer_backend, "extension_available": None,
               "extension_filename": None, "extension_sha256": None,
-              "package_version": _PACKAGE_VERSION}
+              "package_version": _PACKAGE_VERSION,
+              "numerical_runtime": runtime_identity()}
     if optimizer_backend == "python":
         return result
     try:
@@ -107,7 +111,7 @@ class FoldEvaluator:
     Auto reports its actual native path or Python fallback in each stage record.
     Changing max_epochs, random_state, batch_size, or requested backend invalidates
     each affected fold's linear cache on its next use; changing kernel cache
-    capacity does not. Native implementation identity must remain unchanged
+    capacity does not. Optimizer and numerical runtime identities must remain unchanged
     throughout an evaluator's lifetime. Numerical/unexpected errors propagate;
     only one-class retained selections become ordinary ineligible records.
     """
@@ -139,11 +143,11 @@ class FoldEvaluator:
         self.kernel_cache_bytes = kernel_cache_bytes
         self._execution_identities = {}
         self.execution_identity_ = None
+        self._linear_cache = {}
         self._controls()
         self._folds = self._validate_folds(folds)
         for array in (self._X, self._y, self._ids):
             array.setflags(write=False)
-        self._linear_cache = {}
         self.linear_fit_count_ = 0
 
     def _controls(self):
@@ -162,10 +166,14 @@ class FoldEvaluator:
                 "optimizer_backend": self.optimizer_backend}
 
     def _check_execution_identity(self):
-        current = execution_identity(self.optimizer_backend)
-        previous = self._execution_identities.get(self.optimizer_backend)
-        if previous is not None and current != previous:
-            raise RuntimeError("Optimizer execution identity changed during fold evaluation")
+        try:
+            current = execution_identity(self.optimizer_backend)
+            previous = self._execution_identities.get(self.optimizer_backend)
+            if previous is not None and current != previous:
+                raise RuntimeError("Optimizer execution identity changed during fold evaluation")
+        except BaseException:
+            self._linear_cache.clear()
+            raise
         self._execution_identities[self.optimizer_backend] = deepcopy(current)
         self.execution_identity_ = deepcopy(current)
         return current
@@ -286,6 +294,15 @@ class FoldEvaluator:
 
     def evaluate(self, params):
         """Evaluate one candidate, preserving all fold selection failures."""
+        try:
+            return self._evaluate(params)
+        except BaseException:
+            # An interrupted or failed candidate may have cached a screening
+            # fit before the final runtime check. Discard uncertain entries.
+            self._linear_cache.clear()
+            raise
+
+    def _evaluate(self, params):
         params = self._parameters(params)
         controls = self._controls()
         records = []
@@ -346,7 +363,7 @@ class FoldEvaluator:
             records.append(record)
         eligible = all(record["eligible"] for record in records)
         # Check once at candidate boundaries, never in an optimizer update. A
-        # changed extension cannot produce a completed/cache-compatible record.
+        # changed runtime cannot produce a completed/cache-compatible record.
         self._check_execution_identity()
         return {"params": params, "eligible": eligible,
                 "mean_score": float(np.mean([record["accuracy"] for record in records])) if eligible else None,

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Bind adaptive MNIST resumes and screening-cache reuse to the loaded numerical
+  runtime, including scientific extension hashes, BLAS/OpenMP implementations,
+  library hashes and active thread counts. Capture provenance under the same
+  thread settings used for fitting and restore caller settings after loading
+  qualified selections. Discard screening caches after failed or interrupted
+  candidates so unverified fits cannot be reused. Require a fresh directory for
+  older checkpoints that did not record this runtime identity; preserve SGD
+  updates and search policy.
 - Prevent overlapping adaptive MNIST coordinators from modifying the same
   output directory, and hold the operating-system lock through resume and
   qualified-selection export. Validate unique candidate records and complete

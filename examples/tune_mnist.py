@@ -29,7 +29,7 @@ from _adaptive_grid import (AdaptiveSearchConfig, candidate_key, next_search_sta
 from _mnist_cv import FoldEvaluator, execution_identity
 
 
-_CONFIG_SCHEMA_VERSION = 4
+_CONFIG_SCHEMA_VERSION = 5
 _PLAN_SCHEMA_VERSION = 3
 
 
@@ -140,7 +140,7 @@ def _validate_records(records, *, expected_folds, execution_identity):
 def _verify_config_schema(config):
     if config.get('schema_version') != _CONFIG_SCHEMA_VERSION:
         raise ValueError('Unsupported search configuration schema; start a fresh output directory '
-                         'for exact parameter identities.')
+                         'for the current parameter and numerical runtime identities.')
 
 
 def write_json(path, value):
@@ -224,7 +224,7 @@ def _implementation_bytes(identity):
     package = Path(two_stage_sgd_dwd.__file__).parent
     files = list(package.glob('*.py'))
     files += [Path(__file__).with_name(name) for name in
-              ('tune_mnist.py', '_adaptive_grid.py', '_mnist_cv.py')]
+              ('tune_mnist.py', '_adaptive_grid.py', '_mnist_cv.py', '_runtime_identity.py')]
     if identity['extension_available']:
         name = identity['extension_filename']
         if not isinstance(name, str) or Path(name).name != name:
@@ -242,7 +242,7 @@ def _implementation_bytes(identity):
 def _verify_execution_identity(config):
     expected = config['execution_identity']
     if execution_identity(config['optimizer_backend']) != expected:
-        raise ValueError('Native execution identity differs from the saved run')
+        raise ValueError('Optimizer or numerical runtime identity differs from the saved run')
     if expected['extension_available']:
         if config['implementation_sha256'].get(expected['extension_filename']) != expected['extension_sha256']:
             raise ValueError('Native extension is missing from the implementation snapshot identity')
@@ -290,7 +290,8 @@ def _load_qualified_selection_locked(directory):
                  'kernel_cache_bytes', 'execution_identity'):
         if locked.get(name) != config[name]:
             raise ValueError(f'Qualified selection controls differ: {name}')
-    _verify_execution_identity(config)
+    with threadpool_limits(config['threads']):
+        _verify_execution_identity(config)
     verify_implementation_snapshot(directory / 'implementation-snapshot', config['implementation_sha256'])
     return locked
 
@@ -313,6 +314,13 @@ def run_search(args, *, param_grid=None):
     budget; no partial stage earns stopping credit. Neither accepted nor held
     searches automatically refit or access the official test partition.
     """
+    # Capture provenance and create the evaluator under the same numerical
+    # controls used for fitting. Restore the caller's settings on every exit.
+    with threadpool_limits(args.threads):
+        return _run_search(args, param_grid=param_grid)
+
+
+def _run_search(args, *, param_grid):
     policy = _policy_config(args)
     grid = mnist_param_grid(broad=args.broad_grid) if param_grid is None else param_grid
     coarse = list(ParameterGrid(grid))
@@ -479,61 +487,60 @@ def run_search(args, *, param_grid=None):
             existing['score_after'] = ranked[0]['mean_score'] if ranked else None
             write_json(out / 'stages.json', stages)
 
-        with threadpool_limits(args.threads):
-            control_path = out / 'inherited-default-control.json'
-            if not control_path.exists():
-                control = evaluate_candidate('inherited-default-control',
-                    {'kernel': 'rbf', 'lambd': 1e-6, 'gamma': 'scale', 'retention_fraction': .3})
-                write_json(control_path, control)
-            while True:
-                proposal = next_search_stage(records, grid, policy, plan['policy_state'])
-                plan.update(policy_state=proposal['state'], phase=proposal['phase'])
-                write_json(out / 'plan_state.json', plan)
-                if proposal['review'] is not None:
-                    review = proposal['review']
-                    break
-                evaluate_stage(proposal['phase'], proposal['candidates'])
-
-            state = plan['policy_state']
-            _validate_records(records, expected_folds=args.folds,
-                              execution_identity=native_identity)
-            ranked = rank()
-            accepted = review['state'] == 'accepted'
-            selection = {
-                'state': review['state'], 'params': ranked[0]['params'] if ranked else None,
-                'mean_cv_accuracy': ranked[0]['mean_score'] if ranked else None,
-                'eligible_candidates': len(ranked), 'attempted_candidates': len(records),
-                'review_reasons': review['reasons'], 'stopping_reason': review['stopping_reason'],
-                'winner_bracket': state.get('winner_bracket'),
-                'boundary_issues': state.get('boundary_issues', []),
-                'boundary_plateau_evidence': state.get('boundary_plateau_evidence', []),
-                'expansion_rounds': state.get('expansion_rounds', 0),
-                'refinement_rounds': state.get('refinement_rounds', 0),
-                'stable_refinement_rounds': state.get('stable_rounds', 0),
-                'scope': 'training-only adaptive selection at the recorded SGD budget and fixed retention choices',
-                'optimization_convergence_established': False, 'global_optimum_established': False,
-                'final_evaluation_eligible': accepted, 'final_refit_performed': False,
-                'held_out_scored': False, 'official_test_partition_loaded': False,
-                'larger_budget_and_seed_confirmation_recommended': True,
-                'records_sha256': _file_hash(out / 'records.jsonl')}
-            write_json(out / 'selection.json', selection)
-            write_json(out / 'review.json', {**review, 'final_evaluation_eligible': accepted,
-                       'winner_bracket': selection['winner_bracket'],
-                       'stable_refinement_rounds': selection['stable_refinement_rounds']})
-            if accepted:
-                _verify_execution_identity(config)
-                locked = {'params': selection['params'], 'epochs': args.epochs,
-                          'sampling': 'with_replacement', 'batch_size': 1, 'stopping': 'fixed',
-                          'random_state': args.random_state, 'preprocessing': config['preprocessing'],
-                          'package_version': config['package_version'],
-                          **execution_controls, 'execution_identity': native_identity,
-                          'evidence_sha256': {name: _file_hash(out / name) for name in
-                              ('config.json', 'splits.json', 'records.jsonl', 'selection.json', 'review.json')}}
-                write_json(out / 'qualified-selection.json', locked)
-            write_json(out / 'status.json', selection)
-            plan.update(phase='completed', completed=True)
+        control_path = out / 'inherited-default-control.json'
+        if not control_path.exists():
+            control = evaluate_candidate('inherited-default-control',
+                {'kernel': 'rbf', 'lambd': 1e-6, 'gamma': 'scale', 'retention_fraction': .3})
+            write_json(control_path, control)
+        while True:
+            proposal = next_search_stage(records, grid, policy, plan['policy_state'])
+            plan.update(policy_state=proposal['state'], phase=proposal['phase'])
             write_json(out / 'plan_state.json', plan)
-            print(json.dumps(selection), flush=True)
+            if proposal['review'] is not None:
+                review = proposal['review']
+                break
+            evaluate_stage(proposal['phase'], proposal['candidates'])
+
+        state = plan['policy_state']
+        _validate_records(records, expected_folds=args.folds,
+                          execution_identity=native_identity)
+        ranked = rank()
+        accepted = review['state'] == 'accepted'
+        selection = {
+            'state': review['state'], 'params': ranked[0]['params'] if ranked else None,
+            'mean_cv_accuracy': ranked[0]['mean_score'] if ranked else None,
+            'eligible_candidates': len(ranked), 'attempted_candidates': len(records),
+            'review_reasons': review['reasons'], 'stopping_reason': review['stopping_reason'],
+            'winner_bracket': state.get('winner_bracket'),
+            'boundary_issues': state.get('boundary_issues', []),
+            'boundary_plateau_evidence': state.get('boundary_plateau_evidence', []),
+            'expansion_rounds': state.get('expansion_rounds', 0),
+            'refinement_rounds': state.get('refinement_rounds', 0),
+            'stable_refinement_rounds': state.get('stable_rounds', 0),
+            'scope': 'training-only adaptive selection at the recorded SGD budget and fixed retention choices',
+            'optimization_convergence_established': False, 'global_optimum_established': False,
+            'final_evaluation_eligible': accepted, 'final_refit_performed': False,
+            'held_out_scored': False, 'official_test_partition_loaded': False,
+            'larger_budget_and_seed_confirmation_recommended': True,
+            'records_sha256': _file_hash(out / 'records.jsonl')}
+        write_json(out / 'selection.json', selection)
+        write_json(out / 'review.json', {**review, 'final_evaluation_eligible': accepted,
+                   'winner_bracket': selection['winner_bracket'],
+                   'stable_refinement_rounds': selection['stable_refinement_rounds']})
+        if accepted:
+            _verify_execution_identity(config)
+            locked = {'params': selection['params'], 'epochs': args.epochs,
+                      'sampling': 'with_replacement', 'batch_size': 1, 'stopping': 'fixed',
+                      'random_state': args.random_state, 'preprocessing': config['preprocessing'],
+                      'package_version': config['package_version'],
+                      **execution_controls, 'execution_identity': native_identity,
+                      'evidence_sha256': {name: _file_hash(out / name) for name in
+                          ('config.json', 'splits.json', 'records.jsonl', 'selection.json', 'review.json')}}
+            write_json(out / 'qualified-selection.json', locked)
+        write_json(out / 'status.json', selection)
+        plan.update(phase='completed', completed=True)
+        write_json(out / 'plan_state.json', plan)
+        print(json.dumps(selection), flush=True)
         return selection
 
 

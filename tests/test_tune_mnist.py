@@ -418,7 +418,7 @@ def test_auto_without_extension_is_recorded_and_new_availability_blocks_resume(t
         args.resume = True
         with pytest.raises(ValueError, match='Resume'):
             _RUNNER.run_search(args)
-        with pytest.raises(ValueError, match='execution identity'):
+        with pytest.raises(ValueError, match='identity differs'):
             _RUNNER.load_qualified_selection(args.output_dir)
         assert fake.calls == calls
 
@@ -428,7 +428,7 @@ def test_qualified_native_settings_reject_live_binary_swap(tmp_path):
     with native_identity_fixture(tmp_path) as (binary, _), synthetic(fake):
         _RUNNER.run_search(args)
         binary.write_bytes(b'synthetic native build 2')
-        with pytest.raises(ValueError, match='execution identity'):
+        with pytest.raises(ValueError, match='identity differs'):
             _RUNNER.load_qualified_selection(args.output_dir)
 
 

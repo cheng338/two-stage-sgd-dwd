@@ -221,7 +221,25 @@ this alignment does not establish 30% as the best-performing retention.
 `--refinement-rounds` is an optional safety cap, not a success condition; its
 default is unlimited within the candidate budget. Saved folds, settings,
 implementation snapshots, candidate records, and policy state support
-`--resume` only with matching settings, recorded runtime versions, and data.
+`--resume` only with matching settings, numerical runtime identity, and data.
+The runtime record includes Python/platform and scientific-package versions,
+package entrypoint and loaded scientific-extension hashes, and the loaded
+BLAS/OpenMP libraries' metadata, file hashes, and actual thread counts. This
+prevents mixing environments such as AOCL and MKL even when their package
+versions agree. Runtime checks and the evaluator use the requested `--threads`
+setting; loading a qualified selection temporarily applies its recorded thread
+setting and then restores the caller's setting. The identity uses portable
+filenames, so moving unchanged environments alone does not invalidate it.
+The evaluator checks runtime identity at candidate boundaries before reusing
+screening fits. File hashes are cached while file stat stamps agree; no hashing
+occurs inside SGD updates. Keep the environment unchanged during a search:
+loading additional scientific extensions can also change its identity. This
+works best in a dedicated CV process with needed optional modules imported
+before starting. Failed or interrupted candidates discard screening caches;
+after a runtime mismatch, restore the recorded environment before retrying. The
+guard covers loaded scientific binaries and identified BLAS/OpenMP libraries,
+not every dependency file or code already held in memory; it is not a tamper
+attestation or a guarantee of bitwise agreement across different hardware.
 One coordinator at a time may use an output directory, including completed
 resume and qualified-selection export. A nonblocking operating-system lock
 rejects overlapping access; different output directories remain independent.
@@ -237,7 +255,7 @@ The adaptive example preserves normalized floating-point parameter values and
 uses exact candidate identities; nearby values are not rounded into one
 candidate. This can increase the number of candidates relative to older
 searches, within the same configured budgets. Older example checkpoints and
-qualified selections use a different identity scheme and cannot be resumed or
+qualified selections lack the current identity scheme and cannot be resumed or
 loaded by this version. Keep those records and start a fresh output directory.
 Ordinary `make_search` remains fixed-grid CV and does not apply this adaptive
 review gate.

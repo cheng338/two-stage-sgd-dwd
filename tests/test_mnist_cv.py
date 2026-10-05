@@ -4,6 +4,8 @@ import importlib.util
 import hashlib
 import json
 from pathlib import Path
+import sys
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -18,7 +20,8 @@ from two_stage_sgd_dwd import (
 _HELPER_PATH = Path(__file__).resolve().parents[1] / "examples" / "_mnist_cv.py"
 _SPEC = importlib.util.spec_from_file_location("mnist_cv_example", _HELPER_PATH)
 mnist_cv = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(mnist_cv)
+with patch.object(sys, 'path', [str(_HELPER_PATH.parent), *sys.path]):
+    _SPEC.loader.exec_module(mnist_cv)
 
 
 def small_data():
@@ -259,9 +262,11 @@ def test_python_execution_identity_is_portable_and_never_imports_native(monkeypa
 
     monkeypatch.setattr(mnist_cv.importlib, "import_module", unexpected)
     identity = mnist_cv.execution_identity("python")
-    assert identity == {"requested_backend": "python", "extension_available": None,
-                        "extension_filename": None, "extension_sha256": None,
-                        "package_version": mnist_cv._PACKAGE_VERSION}
+    assert {name: value for name, value in identity.items() if name != 'numerical_runtime'} == {
+        "requested_backend": "python", "extension_available": None,
+        "extension_filename": None, "extension_sha256": None,
+        "package_version": mnist_cv._PACKAGE_VERSION}
+    assert identity['numerical_runtime'] == mnist_cv.runtime_identity()
     json.dumps(identity, allow_nan=False)
 
 

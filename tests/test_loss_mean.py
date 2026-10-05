@@ -4,6 +4,8 @@ from fractions import Fraction
 import importlib.util
 from pathlib import Path
 import pickle
+import sys
+from unittest.mock import patch
 import warnings
 
 import numpy as np
@@ -144,7 +146,8 @@ def test_example_cv_retains_representable_fold_loss(monkeypatch):
     path = Path(__file__).resolve().parents[1] / "examples" / "_mnist_cv.py"
     spec = importlib.util.spec_from_file_location("loss_mean_mnist_cv", path)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    with patch.object(sys, 'path', [str(path.parent), *sys.path]):
+        spec.loader.exec_module(module)
     X = np.linspace(-1., 1., 64).reshape(-1, 1)
     y, ids = np.tile([-1, 1], 32), np.arange(64)
     folds = list(StratifiedKFold(2, shuffle=True, random_state=17).split(X, y))
