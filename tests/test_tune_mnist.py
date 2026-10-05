@@ -457,3 +457,108 @@ def test_evaluator_identity_disagreement_is_not_committed(tmp_path):
     assert not records(args.output_dir)
     assert not (args.output_dir / 'inherited-default-control.json').exists()
     assert read(args.output_dir / 'status.json')['state'] == 'failed'
+
+
+def test_exact_adjacent_candidates_survive_interruption_and_resume(tmp_path):
+    adjacent = math.nextafter(1., math.inf)
+    fractions = [.3, math.nextafter(.3, math.inf)]
+    custom = {'kernel': ['rbf'], 'lambd': [1., adjacent], 'gamma': [1., adjacent],
+              'retention_fraction': fractions}
+    args, fake = arguments(tmp_path, max_candidates=8), Scores()
+    original = fake.evaluate
+    interrupted = False
+
+    def evaluate(params):
+        nonlocal interrupted
+        result = original(params)
+        if (params['gamma'] == 1. and params['lambd'] == 1.
+                and params['retention_fraction'] == fractions[1] and not interrupted):
+            interrupted = True
+            raise RuntimeError('adjacent candidate interruption')
+        if params['gamma'] != 'scale':
+            from two_stage_sgd_dwd._core import select_near_boundary
+            chosen = select_near_boundary(np.arange(10.), params['retention_fraction'],
+                                          np.random.default_rng(17))
+            result['n_retained_on_ten_rows'] = len(chosen)
+        return result
+
+    with synthetic(fake), patch.object(fake, 'evaluate', side_effect=evaluate):
+        with pytest.raises(RuntimeError, match='adjacent candidate'):
+            _RUNNER.run_search(args, param_grid=custom)
+        saved = records(args.output_dir)
+        assert len(saved) == 1 and saved[0]['params']['retention_fraction'] == .3
+        args.resume = True
+        result = _RUNNER.run_search(args, param_grid=custom)
+        final = records(args.output_dir)
+        calls = copy.deepcopy(fake.calls)
+        assert _RUNNER.run_search(args, param_grid=custom) == result
+        assert fake.calls == calls
+    assert len(final) == 8 and len(fake.search_calls) == 9  # One interrupted attempt.
+    assert final[:len(saved)] == saved
+    coordinates = {(r['params']['lambd'], r['params']['gamma'],
+                    r['params']['retention_fraction']) for r in final}
+    assert coordinates == {(l, g, f) for l in (1., adjacent) for g in (1., adjacent)
+                           for f in fractions}
+    assert all(r['n_retained_on_ten_rows'] == (3 if r['params']['retention_fraction'] == .3 else 4)
+               for r in final)
+    assert result['attempted_candidates'] == 8
+    assert read(args.output_dir / 'config.json')['grid'] == custom
+    stages = read(args.output_dir / 'stages.json')
+    assert len(stages) == 1 and stages[0]['completed']
+    assert {tuple(p[name] for name in ('lambd', 'gamma', 'retention_fraction'))
+            for p in stages[0]['candidates']} == coordinates
+
+
+def _output_bytes(directory):
+    return {path.relative_to(directory).as_posix(): path.read_bytes()
+            for path in directory.rglob('*') if path.is_file()}
+
+
+@pytest.mark.parametrize('completed', [False, True])
+@pytest.mark.parametrize('legacy', ['config', 'plan', 'policy', 'missing_policy_schema'])
+def test_legacy_grid_identity_rejected_before_evaluation_or_output_changes(tmp_path, completed, legacy):
+    args = arguments(tmp_path)
+    fake = Scores(fail_once=None if completed else (1., 1.))
+    with synthetic(fake):
+        if completed:
+            _RUNNER.run_search(args)
+        else:
+            with pytest.raises(RuntimeError, match='synthetic interruption'):
+                _RUNNER.run_search(args)
+        filename = 'config.json' if legacy == 'config' else 'plan_state.json'
+        path = args.output_dir / filename
+        value = read(path)
+        if legacy == 'config':
+            value['schema_version'] = 3
+        elif legacy == 'plan':
+            value['schema_version'] = 2
+        elif legacy == 'policy':
+            value['policy_state']['schema_version'] = 1
+        else:
+            value['policy_state'].pop('schema_version')
+        path.write_text(json.dumps(value), encoding='utf-8')
+        before = _output_bytes(args.output_dir)
+        calls, constructors = copy.deepcopy(fake.calls), len(fake.constructed)
+        args.resume = True
+        with pytest.raises(ValueError, match='fresh output directory'):
+            _RUNNER.run_search(args)
+        assert fake.calls == calls and len(fake.constructed) == constructors
+        assert _output_bytes(args.output_dir) == before
+
+
+def test_legacy_qualified_selection_requires_fresh_output_directory(tmp_path):
+    args, fake = arguments(tmp_path), Scores()
+    with synthetic(fake):
+        _RUNNER.run_search(args)
+    config_path = args.output_dir / 'config.json'
+    config = read(config_path)
+    config['schema_version'] = 3
+    config_path.write_text(json.dumps(config), encoding='utf-8')
+    lock_path = args.output_dir / 'qualified-selection.json'
+    locked = read(lock_path)
+    locked['evidence_sha256']['config.json'] = hashlib.sha256(config_path.read_bytes()).hexdigest()
+    lock_path.write_text(json.dumps(locked), encoding='utf-8')
+    before = _output_bytes(args.output_dir)
+    with pytest.raises(ValueError, match='fresh output directory'):
+        _RUNNER.load_qualified_selection(args.output_dir)
+    assert _output_bytes(args.output_dir) == before

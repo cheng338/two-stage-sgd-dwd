@@ -24,8 +24,18 @@ import two_stage_sgd_dwd
 from two_stage_sgd_dwd import mnist_param_grid
 from two_stage_sgd_dwd.datasets import load_mnist_pair
 from _adaptive_grid import (AdaptiveSearchConfig, candidate_key, next_search_stage,
-                            ordered_eligible)
+                            ordered_eligible, POLICY_STATE_SCHEMA_VERSION)
 from _mnist_cv import FoldEvaluator, execution_identity
+
+
+_CONFIG_SCHEMA_VERSION = 4
+_PLAN_SCHEMA_VERSION = 3
+
+
+def _verify_config_schema(config):
+    if config.get('schema_version') != _CONFIG_SCHEMA_VERSION:
+        raise ValueError('Unsupported search configuration schema; start a fresh output directory '
+                         'for exact parameter identities.')
 
 
 def write_json(path, value):
@@ -136,6 +146,8 @@ def load_qualified_selection(directory):
     reserved partition and the recorded settings without tuning on that data.
     """
     directory = Path(directory)
+    config = json.loads((directory / 'config.json').read_text(encoding='utf-8'))
+    _verify_config_schema(config)
     status = json.loads((directory / 'status.json').read_text(encoding='utf-8'))
     if status.get('state') != 'accepted' or not status.get('final_evaluation_eligible'):
         raise ValueError('Search needs review; final evaluation is not qualified')
@@ -153,7 +165,6 @@ def load_qualified_selection(directory):
             or not np.isfinite(selection['mean_cv_accuracy'])
             or selection['params'] != locked['params']):
         raise ValueError('Qualified selection disagrees with the saved review')
-    config = json.loads((directory / 'config.json').read_text(encoding='utf-8'))
     for name in ('epochs', 'sampling', 'batch_size', 'stopping', 'random_state',
                  'preprocessing', 'package_version', 'optimizer_backend',
                  'kernel_cache_bytes', 'execution_identity'):
@@ -203,7 +214,7 @@ def run_search(args, *, param_grid=None):
         'folds': [{'fit': fit.tolist(), 'score': score.tolist()} for fit, score in folds]}
     import scipy
     import sklearn
-    config = {'schema_version': 3, 'digits': list(data.digits),
+    config = {'schema_version': _CONFIG_SCHEMA_VERSION, 'digits': list(data.digits),
         'train_size': args.train_size, 'folds': args.folds,
         'epochs': args.epochs, 'random_state': args.random_state, 'batch_size': 1,
         'sampling': 'with_replacement', 'stopping': 'fixed',
@@ -224,15 +235,23 @@ def run_search(args, *, param_grid=None):
     out = Path(args.output_dir)
     if args.resume:
         saved = json.loads((out / 'config.json').read_text(encoding='utf-8'))
+        _verify_config_schema(saved)
         if saved != config:
             raise ValueError('Resume configuration, implementation, runtime or input data differs from the saved run')
         if json.loads((out / 'splits.json').read_text(encoding='utf-8')) != split_payload:
             raise ValueError('Resume observation IDs or folds differ from the saved split')
         verify_implementation_snapshot(out / 'implementation-snapshot', config['implementation_sha256'])
         plan = json.loads((out / 'plan_state.json').read_text(encoding='utf-8'))
-        if (plan.get('schema_version') != 2 or not isinstance(plan.get('policy_state'), dict)
+        if plan.get('schema_version') != _PLAN_SCHEMA_VERSION:
+            raise ValueError('Unsupported saved search plan schema; start a fresh output directory '
+                             'for exact parameter identities.')
+        if (not isinstance(plan.get('policy_state'), dict)
                 or not isinstance(plan.get('completed'), bool)):
             raise ValueError('Invalid saved search phase in plan_state.json')
+        if (plan['policy_state'] and
+                plan['policy_state'].get('schema_version') != POLICY_STATE_SCHEMA_VERSION):
+            raise ValueError('Unsupported saved search policy schema; start a fresh output directory '
+                             'for exact parameter identities.')
         records = read_records(out / 'records.jsonl')
         stages = json.loads((out / 'stages.json').read_text(encoding='utf-8'))
         if plan['completed']:
@@ -256,7 +275,8 @@ def run_search(args, *, param_grid=None):
         write_json(out / 'splits.json', split_payload)
         (out / 'records.jsonl').write_text('', encoding='utf-8')
         write_json(out / 'stages.json', stages)
-        plan = {'schema_version': 2, 'policy_state': {}, 'phase': 'coarse', 'completed': False}
+        plan = {'schema_version': _PLAN_SCHEMA_VERSION, 'policy_state': {},
+                'phase': 'coarse', 'completed': False}
         write_json(out / 'plan_state.json', plan)
     attempted = {candidate_key(record['params']) for record in records}
     if len(attempted) != len(records):

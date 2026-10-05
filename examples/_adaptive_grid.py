@@ -14,6 +14,7 @@ from numbers import Integral, Real
 
 _KEYS = ("lambd", "gamma", "retention_fraction")
 _AXES = ("lambd", "gamma")
+POLICY_STATE_SCHEMA_VERSION = 2
 
 
 def _positive(value, name, *, retention=False):
@@ -31,9 +32,8 @@ def _positive(value, name, *, retention=False):
 
 
 def _token(value):
-    # Strings avoid overflowing a maximum finite float merely by rounding its
-    # key to 15 significant digits. Proposal coordinates remain numeric.
-    return format(value, ".15g")
+    # Preserve every normalized float, including adjacent values and extremes.
+    return value.hex()
 
 
 def _parameters(params):
@@ -49,7 +49,7 @@ def _parameters(params):
 
 
 def candidate_key(params):
-    """Return ordered 15-significant-digit string keys for the three axes.
+    """Return ordered, exact hexadecimal float keys for the three axes.
 
     lambd and gamma must be positive finite numbers; retention_fraction must
     additionally be at most one. An optional kernel entry must equal 'rbf'.
@@ -93,12 +93,7 @@ def _records(records):
 
 
 def _unique(values):
-    representatives = {}
-    for value in values:
-        key = _token(value)
-        # Select the same representative regardless of record ordering.
-        representatives[key] = min(value, representatives.get(key, value))
-    return sorted(representatives.values())
+    return sorted(set(values))
 
 
 def _coordinates(parsed):
@@ -242,8 +237,8 @@ def propose_refinement(records, retention_values, top_k=3):
     fractions, breaking ties by larger lambd then smaller gamma. Around each of
     the best top_k pairs, use the pair and geometric midpoints to each explored
     neighbor, form their local Cartesian product, and use every fixed retention
-    fraction. Coordinates indistinguishable at 15 significant digits are not
-    refined. All already attempted keys are excluded.
+    fraction. An interval is refined only when its computed midpoint is
+    representably inside its endpoints. All already attempted keys are excluded.
     """
     if isinstance(top_k, bool) or not isinstance(top_k, Integral) or top_k < 1:
         raise ValueError("top_k must be a positive integer")
@@ -329,13 +324,8 @@ def parameter_hash(value):
                                      allow_nan=False).encode('utf-8')).hexdigest()
 
 
-def _canonical_number(value):
-    rounded = float(_token(value))
-    return rounded if math.isfinite(rounded) and rounded > 0 else float(value)
-
-
 def _canonical_params(params):
-    return _proposal(tuple(_canonical_number(value) for value in _parameters(params)))
+    return _proposal(_parameters(params))
 
 
 def _finite_score(value):
@@ -406,8 +396,8 @@ def _initial_grid(grid, config):
             raise ValueError('Grid values must be nonempty iterables') from error
         if not values:
             raise ValueError('Grid values must be nonempty iterables')
-        result[name] = _unique(_canonical_number(_positive(value, name,
-                               retention=name == 'retention_fraction')) for value in values)
+        result[name] = _unique(_positive(value, name,
+                               retention=name == 'retention_fraction') for value in values)
     if list(grid.get('kernel', ['rbf'])) != ['rbf']:
         raise ValueError('The adaptive policy requires kernel=["rbf"]')
     result['kernel'] = ['rbf']
@@ -484,7 +474,6 @@ def _outside(values, side):
         value = math.exp(math.log(edge) + (-step if side == 'low' else step))
     except OverflowError:
         value = math.inf
-    value = _canonical_number(value) if math.isfinite(value) and value > 0 else value
     if (not math.isfinite(value) or value <= 0 or _token(value) in {_token(point) for point in ordered}
             or not (value < edge if side == 'low' else value > edge)):
         raise ValueError('Further boundary values are outside representable positive arithmetic.')
@@ -558,7 +547,7 @@ def _adjacent(value, values):
 
 def _midpoint(first, second):
     lower, upper = sorted((first, second))
-    value = _canonical_number(math.sqrt(lower) * math.sqrt(upper))
+    value = math.sqrt(lower) * math.sqrt(upper)
     return value if (lower < value < upper
                      and _token(value) not in {_token(lower), _token(upper)}) else None
 
@@ -700,9 +689,10 @@ def next_search_stage(records, initial_grid, config, state=None):
             indexes[axis].setdefault(signature, {})[float(parameters[axis])] = row
     results = {**results, '_conditional_indexes': indexes}
     state = deepcopy({} if state is None else state)
-    if state.get('schema_version', 1) != 1:
-        raise ValueError('Unsupported search policy state schema.')
-    state['schema_version'] = 1
+    if state and state.get('schema_version') != POLICY_STATE_SCHEMA_VERSION:
+        raise ValueError('Unsupported search policy state schema; start a fresh output directory '
+                         'for exact parameter identities.')
+    state['schema_version'] = POLICY_STATE_SCHEMA_VERSION
     identity = parameter_hash((asdict(config), grid))
     if state.get('identity', identity) != identity:
         raise ValueError('Search policy state belongs to different settings or initial grid.')

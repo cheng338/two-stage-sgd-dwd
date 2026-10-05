@@ -222,9 +222,14 @@ this alignment does not establish 30% as the best-performing retention.
 default is unlimited within the candidate budget. Saved folds, settings,
 implementation snapshots, candidate records, and policy state support
 `--resume` only with matching settings, recorded runtime versions, and data.
-This version does not resume
-older example checkpoints. Ordinary `make_search` remains fixed-grid CV and
-does not apply this adaptive review gate.
+The adaptive example preserves normalized floating-point parameter values and
+uses exact candidate identities; nearby values are not rounded into one
+candidate. This can increase the number of candidates relative to older
+searches, within the same configured budgets. Older example checkpoints and
+qualified selections use a different identity scheme and cannot be resumed or
+loaded by this version. Keep those records and start a fresh output directory.
+Ordinary `make_search` remains fixed-grid CV and does not apply this adaptive
+review gate.
 
 Search acceptance is a finite empirical stopping decision. It does not
 establish solver convergence, a global optimum, or final test accuracy.

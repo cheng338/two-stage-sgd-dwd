@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Preserve normalized floating-point coordinates in the adaptive MNIST
+  example and use exact candidate identities instead of 15-digit rounding.
+  Keep distinct nearby values as separate candidates, and require a fresh
+  output directory for searches saved under the older identity scheme.
 - Recover representable mean DWD losses when their intermediate sum overflows,
   including objectives, validation and cross-validation scoring. Preserve
   ordinary loss averages and reject genuinely nonfinite kernel objectives.

@@ -35,12 +35,13 @@ def triples(proposals):
 
 
 class CandidateKeyTests(unittest.TestCase):
-    def test_keys_are_ordered_15_significant_digit_tokens(self):
+    def test_keys_are_ordered_lossless_float_tokens(self):
         params = {"retention_fraction": 0.05, "gamma": 1.234567890123456,
                   "lambd": 0.01, "kernel": "rbf"}
-        self.assertEqual(candidate_key(params), ("0.01", "1.23456789012346", "0.05"))
-        rounded = dict(params, gamma=1.2345678901234562)
-        self.assertEqual(candidate_key(params), candidate_key(rounded))
+        self.assertEqual(candidate_key(params), tuple(float(params[name]).hex()
+                         for name in ("lambd", "gamma", "retention_fraction")))
+        adjacent = dict(params, gamma=math.nextafter(params["gamma"], math.inf))
+        self.assertNotEqual(candidate_key(params), candidate_key(adjacent))
 
     def test_extreme_finite_values_have_finite_input_keys(self):
         result = candidate_key({"lambd": math.ulp(0.0), "gamma": sys.float_info.max,
@@ -109,7 +110,7 @@ class BoundaryAndExpansionTests(unittest.TestCase):
         proposals = propose_expansion(records, [0.05, 0.1])
         keys = {candidate_key(params) for params in proposals}
         self.assertNotIn(candidate_key(failed["params"]), keys)
-        self.assertNotIn(("1", "2", "0.1"), keys)  # No invented lower expansion.
+        self.assertNotIn(candidate_key(record(1., 2., .1)["params"]), keys)
         self.assertEqual({p["lambd"] for p in proposals}, {1.0, 10.0, 100.0})
 
     def test_ineligible_finite_score_cannot_win(self):
@@ -308,7 +309,12 @@ class ConditionalPolicyTests(unittest.TestCase):
                 for p in _MODULE._parameter_grid(initial)]
         answer = _MODULE.next_search_stage(rows, initial, _MODULE.AdaptiveSearchConfig())
         self.assertEqual(answer['phase'], 'expansion-1')
-        self.assertIn((64., 4., .3), triples(answer['candidates']))
+        matching = [p for p in answer['candidates']
+                    if p['gamma'] == 4. and p['retention_fraction'] == .3]
+        self.assertEqual(len(matching), 1)
+        # The log/exp expansion remains at its computed binary value rather
+        # than being rounded to a 15-digit decimal coordinate.
+        self.assertAlmostEqual(matching[0]['lambd'], 64., delta=2 * math.ulp(64.))
 
     def test_invalid_outer_attempts_cannot_certify_interior_or_plateau(self):
         answer, rows, _ = drive_policy(lambda p: .5 if all(1 <= value <= 4 for value in policy_pair(p)) else None,
@@ -459,7 +465,9 @@ class ConditionalPolicyTests(unittest.TestCase):
             _MODULE.next_search_stage([entry, copy.deepcopy(entry)], policy_grid(), _MODULE.AdaptiveSearchConfig())
 
     def test_close_float_exhaustion_holds_without_reproposing_an_attempted_key(self):
-        values = (1., 1.00000000000001, 1.00000000000002)
+        # There is no representable float inside either adjacent interval.
+        middle = math.nextafter(1., math.inf)
+        values = (1., middle, math.nextafter(middle, math.inf))
         initial = policy_grid(values)
         rows = [policy_record(p, .75 if p['lambd'] == values[1] and p['gamma'] == values[1] else .25)
                 for p in _MODULE._parameter_grid(initial)]
