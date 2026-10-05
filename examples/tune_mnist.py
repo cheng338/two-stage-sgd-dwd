@@ -29,8 +29,9 @@ from _adaptive_grid import (AdaptiveSearchConfig, candidate_key, next_search_sta
 from _mnist_cv import FoldEvaluator, execution_identity
 
 
-_CONFIG_SCHEMA_VERSION = 5
+_CONFIG_SCHEMA_VERSION = 6
 _PLAN_SCHEMA_VERSION = 3
+_RECEIPT_SCHEMA_VERSION = 1
 
 
 class SearchBusyError(RuntimeError):
@@ -140,7 +141,68 @@ def _validate_records(records, *, expected_folds, execution_identity):
 def _verify_config_schema(config):
     if config.get('schema_version') != _CONFIG_SCHEMA_VERSION:
         raise ValueError('Unsupported search configuration schema; start a fresh output directory '
-                         'for the current parameter and numerical runtime identities.')
+                         'for the current parameter, runtime and candidate receipt identities.')
+
+
+def _content_sha256(value):
+    """Hash JSON content independently of indentation or dictionary key order."""
+    content = json.dumps(value, sort_keys=True, separators=(',', ':'),
+                         ensure_ascii=False, allow_nan=False).encode('utf-8')
+    return hashlib.sha256(content).hexdigest()
+
+
+def _unique_json_object(pairs):
+    result = {}
+    for name, value in pairs:
+        if name in result:
+            raise ValueError('Duplicate JSON field: ' + name)
+        result[name] = value
+    return result
+
+
+def _read_json(path):
+    return json.loads(path.read_text(encoding='utf-8'),
+                      object_pairs_hook=_unique_json_object)
+
+
+def _run_sha256(config, splits):
+    return _content_sha256({'config': config, 'splits': splits})
+
+
+def _seal_record(record, *, run_sha256, sequence, previous_sha256):
+    """Attach a receipt in the same append as the candidate it protects."""
+    if '_receipt' in record:
+        raise ValueError('Evaluator records must not supply a candidate receipt')
+    receipt = {'schema_version': _RECEIPT_SCHEMA_VERSION,
+               'run_sha256': run_sha256, 'sequence': sequence,
+               'candidate_key': list(candidate_key(record['params'])),
+               'previous_sha256': previous_sha256}
+    sealed = {**record, '_receipt': receipt}
+    digest = _content_sha256(sealed)
+    receipt['sha256'] = digest
+    return sealed
+
+
+def _verify_receipts(records, *, run_sha256):
+    """Verify the complete committed prefix before any recovery writes."""
+    previous = run_sha256
+    required = {'schema_version', 'run_sha256', 'sequence', 'candidate_key',
+                'previous_sha256', 'sha256'}
+    for sequence, record in enumerate(records):
+        receipt = record.get('_receipt')
+        if (not isinstance(receipt, dict) or set(receipt) != required
+                or type(receipt['schema_version']) is not int
+                or receipt['schema_version'] != _RECEIPT_SCHEMA_VERSION
+                or type(receipt['sequence']) is not int
+                or receipt['sequence'] != sequence
+                or receipt['run_sha256'] != run_sha256
+                or receipt['candidate_key'] != list(candidate_key(record['params']))
+                or receipt['previous_sha256'] != previous):
+            raise ValueError(f'Invalid candidate receipt at record {sequence}')
+        metadata = {key: value for key, value in receipt.items() if key != 'sha256'}
+        if _content_sha256({**record, '_receipt': metadata}) != receipt['sha256']:
+            raise ValueError(f'Candidate receipt content differs at record {sequence}')
+        previous = receipt['sha256']
 
 
 def write_json(path, value):
@@ -165,7 +227,7 @@ def balanced_indices(y, count, seed):
     return np.sort(selected)
 
 
-def read_records(path, *, expected_folds, execution_identity, recover=True):
+def read_records(path, *, expected_folds, execution_identity, run_sha256, recover=True):
     original = path.read_bytes()
     raw = original.decode('utf-8')
     lines = raw.splitlines(keepends=True)
@@ -173,7 +235,7 @@ def read_records(path, *, expected_folds, execution_identity, recover=True):
     interrupted = False
     for index, line in enumerate(lines):
         try:
-            records.append(json.loads(line))
+            records.append(json.loads(line, object_pairs_hook=_unique_json_object))
         except json.JSONDecodeError:
             if not recover or index != len(lines)-1 or line.endswith('\n'):
                 raise
@@ -181,6 +243,7 @@ def read_records(path, *, expected_folds, execution_identity, recover=True):
     # Never repair a tail until all preceding records are safe to reuse.
     _validate_records(records, expected_folds=expected_folds,
                       execution_identity=execution_identity)
+    _verify_receipts(records, run_sha256=run_sha256)
     if interrupted:
         backup = path.with_name('records-interrupted.jsonl')
         if backup.exists():
@@ -262,12 +325,12 @@ def load_qualified_selection(directory):
 
 
 def _load_qualified_selection_locked(directory):
-    config = json.loads((directory / 'config.json').read_text(encoding='utf-8'))
+    config = _read_json(directory / 'config.json')
     _verify_config_schema(config)
-    status = json.loads((directory / 'status.json').read_text(encoding='utf-8'))
+    status = _read_json(directory / 'status.json')
     if status.get('state') != 'accepted' or not status.get('final_evaluation_eligible'):
         raise ValueError('Search needs review; final evaluation is not qualified')
-    locked = json.loads((directory / 'qualified-selection.json').read_text(encoding='utf-8'))
+    locked = _read_json(directory / 'qualified-selection.json')
     required = {'config.json', 'splits.json', 'records.jsonl', 'selection.json', 'review.json'}
     if set(locked.get('evidence_sha256', {})) != required:
         raise ValueError('Qualified selection is missing required evidence hashes')
@@ -275,10 +338,12 @@ def _load_qualified_selection_locked(directory):
         if _file_hash(directory / name) != expected:
             raise ValueError(f'Qualified selection evidence differs: {name}')
     records = read_records(directory / 'records.jsonl', expected_folds=config['folds'],
-                           execution_identity=config['execution_identity'], recover=False)
+                           execution_identity=config['execution_identity'],
+                           run_sha256=_run_sha256(config, _read_json(directory / 'splits.json')),
+                           recover=False)
     if not ordered_eligible(records, expected_folds=config['folds']):
         raise ValueError('Qualified selection requires eligible candidate evidence')
-    selection = json.loads((directory / 'selection.json').read_text(encoding='utf-8'))
+    selection = _read_json(directory / 'selection.json')
     if (selection.get('state') != 'accepted' or selection['review_reasons']
             or not selection.get('eligible_candidates')
             or not isinstance(selection.get('mean_cv_accuracy'), (int, float))
@@ -360,19 +425,20 @@ def _run_search(args, *, param_grid):
                     'scipy': scipy.__version__, 'scikit_learn': sklearn.__version__},
         'implementation_sha256': {name: hashlib.sha256(content).hexdigest()
                                   for name, content in implementation_bytes.items()}}
+    run_sha256 = _run_sha256(config, split_payload)
     out = Path(args.output_dir)
     if not args.resume:
         out.mkdir(parents=True, exist_ok=False)
     with _RunLease(out / '.run.lock'):
         if args.resume:
-            saved = json.loads((out / 'config.json').read_text(encoding='utf-8'))
+            saved = _read_json(out / 'config.json')
             _verify_config_schema(saved)
             if saved != config:
                 raise ValueError('Resume configuration, implementation, runtime or input data differs from the saved run')
-            if json.loads((out / 'splits.json').read_text(encoding='utf-8')) != split_payload:
+            if _read_json(out / 'splits.json') != split_payload:
                 raise ValueError('Resume observation IDs or folds differ from the saved split')
             verify_implementation_snapshot(out / 'implementation-snapshot', config['implementation_sha256'])
-            plan = json.loads((out / 'plan_state.json').read_text(encoding='utf-8'))
+            plan = _read_json(out / 'plan_state.json')
             if plan.get('schema_version') != _PLAN_SCHEMA_VERSION:
                 raise ValueError('Unsupported saved search plan schema; start a fresh output directory '
                                  'for exact parameter identities.')
@@ -384,10 +450,10 @@ def _run_search(args, *, param_grid):
                 raise ValueError('Unsupported saved search policy schema; start a fresh output directory '
                                  'for exact parameter identities.')
             records = read_records(out / 'records.jsonl', expected_folds=args.folds,
-                                   execution_identity=native_identity)
-            stages = json.loads((out / 'stages.json').read_text(encoding='utf-8'))
+                                   execution_identity=native_identity, run_sha256=run_sha256)
+            stages = _read_json(out / 'stages.json')
             if plan['completed']:
-                result = json.loads((out / 'selection.json').read_text(encoding='utf-8'))
+                result = _read_json(out / 'selection.json')
                 if result['records_sha256'] != _file_hash(out / 'records.jsonl'):
                     raise ValueError('Completed search records differ from the saved selection')
                 if result['state'] == 'accepted':
@@ -468,6 +534,10 @@ def _run_search(args, *, param_grid):
                 if candidate_key(record['params']) != key:
                     raise ValueError('Evaluator returned a different parameter candidate')
                 record.update(stage=name, elapsed_seconds_not_a_benchmark=time.perf_counter()-start)
+                record = _seal_record(record, run_sha256=run_sha256,
+                                      sequence=len(records),
+                                      previous_sha256=(records[-1]['_receipt']['sha256']
+                                                       if records else run_sha256))
                 with (out / 'records.jsonl').open('a', encoding='utf-8') as stream:
                     stream.write(json.dumps(record, allow_nan=False) + '\n')
                     stream.flush()
@@ -504,6 +574,7 @@ def _run_search(args, *, param_grid):
         state = plan['policy_state']
         _validate_records(records, expected_folds=args.folds,
                           execution_identity=native_identity)
+        _verify_receipts(records, run_sha256=run_sha256)
         ranked = rank()
         accepted = review['state'] == 'accepted'
         selection = {

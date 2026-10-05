@@ -252,6 +252,16 @@ Process exit or interruption releases its lock; do not delete the file to
 force access. Saved and newly evaluated candidate records must have unique
 exact parameter identities and consistent complete fold evidence. Legitimate
 failed folds remain recorded and ineligible for selection.
+Each committed candidate also has an inline SHA256 receipt binding its complete
+JSON content, exact parameter identity, position, and preceding receipt to the
+saved configuration and folds. Resume verifies all complete records before
+repairing an interrupted final line or fitting another candidate. Changes to
+scores, diagnostics, ordering or run identity are rejected even if the edited
+JSON remains valid. Whitespace and dictionary key order do not affect content
+checksums. These receipts detect inconsistent edits; they are not signatures
+and do not independently detect replacement by an older complete valid prefix.
+Keep original run archives when preserving an audit trail.
+Duplicate JSON fields are rejected to avoid ambiguous checkpoint contents.
 Resume and qualified-selection loading require writable access to the lockfile
 (and to its directory when creating it). Use a writable copy of a read-only
 archive; inaccessible locks fail closed instead of permitting unlocked access.

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add inline candidate receipts to adaptive MNIST records, binding their full
+  content and sequence to the saved configuration and folds. Verify complete
+  records before resumed fitting or interrupted-tail repair, reject duplicate
+  JSON fields in checkpoints, and require a fresh directory for older
+  checkpoints without receipts. Preserve SGD updates,
+  search policy, and recovery of genuinely interrupted final writes.
 - Support Python 3.10 with portable builds and a version-specific CPython 3.10
   native extension. Retain the Python 3.11 stable ABI for native builds on
   Python 3.11 and newer, with the same strict arithmetic and SGD implementation.
