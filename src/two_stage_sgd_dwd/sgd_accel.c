@@ -51,8 +51,9 @@ static PyObject *run_steps(PyObject *self, PyObject *args) {
     Py_ssize_t completed = 0;
     if (!PyArg_ParseTuple(args, "iOdOOOOd", &kind, &weights, &bias, &get_row,
                           &labels, &indices, &rates, &regularization)) return NULL;
+    int tuple_rows = kind == 0 && PyTuple_CheckExact(get_row);
     if ((kind != 0 && kind != 1) || !isfinite(bias) || !isfinite(regularization) ||
-            (kind == 1 && regularization <= 0) || !PyCallable_Check(get_row)) {
+            (kind == 1 && regularization <= 0) || (!tuple_rows && !PyCallable_Check(get_row))) {
         PyErr_SetString(PyExc_ValueError, "Invalid scalar solver controls");
         return NULL;
     }
@@ -80,10 +81,15 @@ static PyObject *run_steps(PyObject *self, PyObject *args) {
         if (i < 0 || i >= n || !isfinite(steps[t]) || steps[t] < 0 || (ys[i] != -1 && ys[i] != 1)) {
             PyErr_SetString(PyExc_ValueError, "Invalid sampled observation or step size"); goto cleanup;
         }
-        PyObject *index = PyLong_FromLongLong(i);
-        if (index == NULL) goto cleanup;
-        row = PyObject_CallFunctionObjArgs(get_row, index, NULL);
-        Py_DECREF(index);
+        if (tuple_rows) {
+            row = PyTuple_GetItem(get_row, (Py_ssize_t)i);
+            Py_XINCREF(row);
+        } else {
+            PyObject *index = PyLong_FromLongLong(i);
+            if (index == NULL) goto cleanup;
+            row = PyObject_CallFunctionObjArgs(get_row, index, NULL);
+            Py_DECREF(index);
+        }
         if (row == NULL) {
             if (take_numeric_error(&error)) break;
             goto cleanup;
@@ -204,6 +210,9 @@ PyMODINIT_FUNC PyInit__sgd_accel(void) {
     state->ndarray_type = PyObject_GetAttrString(numpy, "ndarray");
     Py_DECREF(numpy);
     if (!state->dot_function || !state->copy_function || !state->empty_function || !state->ndarray_type) {
+        Py_DECREF(created); return NULL;
+    }
+    if (PyModule_AddIntConstant(created, "_supports_tuple_rows", 1) < 0) {
         Py_DECREF(created); return NULL;
     }
     return created;

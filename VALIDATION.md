@@ -1,3 +1,58 @@
+# Development verification — direct native linear row access
+
+On October 4, 2026, direct native linear row access passed **593 tests and
+8,280 subtests** with the rebuilt extension. Compatibility with the previous
+extension passed **581 tests and 7,658 subtests**, with 12 capability-dependent
+skips. A separate portable source copy passed **524 tests and 4,665 subtests**,
+with 69 native-dependent skips. Each suite produced only the existing warning
+from an invalid-label fixture.
+
+The native linear loop retrieves the same row object directly from its exact
+built-in tuple, avoiding per-update Python index creation and a bound-method
+call. Buffer validation remains inside the update loop. NumPy dot products,
+gradients, projection, finite checks, sampling, learning rates and committed
+failure prefixes are unchanged. A capability flag retains callable access
+with older extensions; kernel and custom callable providers keep their path.
+Tests cover every update prefix, malformed sampled and unsampled rows, read-only
+and invalid layouts, reference ownership, numerical and structural failures,
+public estimator dispatch, both sampling policies and older-binary fallback.
+
+Complete-fit timings used MNIST pairs 2–3, 4–9 and 3–8, with saved training
+draws 00, 04 and 09 per pair. Each draw was timed twice in alternating order:
+six paired timings per pair, not six independent training draws. Fresh fits
+included StandardScaler and both native stages at 800 epochs, 30% retention
+and a 64 MiB lazy-cache payload limit. The runtime was py12_df_aocl with
+NumPy 2.5.2 and one native thread. Means and sample SDs combine the three
+draws and their two timing repetitions.
+
+| Pair | Previous fit, s (mean ± SD) | Direct rows, s (mean ± SD) | Time saved |
+| --- | ---: | ---: | ---: |
+| 2–3 | 4.173 ± 0.029 | 4.041 ± 0.042 | 3.15% |
+| 4–9 | 4.021 ± 0.062 | 3.945 ± 0.093 | 1.88% |
+| 3–8 | 4.092 ± 0.048 | 3.991 ± 0.039 | 2.47% |
+
+The candidate was faster in 17 of 18 complete-fit comparisons. One 4–9 timing
+was 2.37% slower. All 90 paired complete and short kernel fits matched exact
+non-timing fitted states, coefficients, RNG states, selections, cache/kernel
+counters, scores and predicted labels. All nine complete-model configurations
+reproduced the original study score hashes. Inputs and historical study
+outputs were unchanged; no test labels were loaded or settings retuned.
+
+Separate short kernel fits used one or five epochs on retained draw-00 data,
+with full, evicting, disabled or subcolumn cache budgets. Five control means
+were slower by 0.017–0.232%; these are not complete two-stage fit timings.
+Separate fixed-update controls used 1, 8, 784 and 4,096 features with and
+without projection, one/two-update blocks, and unchanged callable routes.
+All 72 paired control blocks matched exactly. The tuple-route control means
+used 1.23–4.87% less time; the callable linear control averaged 0.044% slower.
+Those controls exclude sampling/rate preparation, preprocessing and kernel
+evaluation and do not establish complete-fit performance.
+
+The change is included as a modest optimization with limited implementation
+complexity. These measurements do not establish a speedup for every supported
+input or platform. The Python backend and older native binaries keep their
+existing execution paths. See [optimizer details](docs/optimizer-backends.md).
+
 # Development verification — native kernel coefficient validation
 
 On October 4, 2026, combined native kernel shrinkage and finite-value checks

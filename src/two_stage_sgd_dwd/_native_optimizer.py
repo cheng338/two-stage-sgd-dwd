@@ -113,7 +113,8 @@ def optimize(kind, X, y, rng, est, native, column_cache=None):
                      if kind == "kernel" else None)
     if kind == "linear":
         rows = tuple(X[i] for i in range(m))
-        get_row = rows.__getitem__
+        # Older extensions retain the callable row interface.
+        get_row = rows if getattr(native, "_supports_tuple_rows", False) else rows.__getitem__
     elif column_loader is not None:
         def get_row(i):
             if column_cache is None:

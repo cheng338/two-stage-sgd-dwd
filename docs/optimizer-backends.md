@@ -91,6 +91,16 @@ retain their separate meanings.
 
 ## Availability and timing
 
+For linear fitting, a compatible native extension retrieves each selected
+row directly from the existing tuple of row views. This avoids creating a
+Python index and calling a bound method for each update. The same row object
+passes through the existing buffer checks, NumPy dot product and scalar
+update. Rows are still checked when selected, and failure recovery is unchanged.
+Older extensions retain callable row access through capability detection;
+kernel loaders and custom callable providers keep their existing path. Private
+wrappers around `run_steps` that inspect the row provider must honor or disable
+the `_supports_tuple_rows` capability rather than assume it is always callable.
+
 The native linear loop checks every proposed coefficient while constructing
 the proposal. For ordinary NumPy arrays that need no projection, it avoids
 scanning that unchanged proposal a second time. Projected linear updates,

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Retrieve native linear fitting rows directly from their existing tuple,
+  avoiding a Python index and method call per update. Preserve row validation,
+  update arithmetic and failure recovery; retain callable kernel loaders and
+  compatibility with older compiled extensions.
+
 - Combine native kernel shrinkage and finite-value checks for ordinary NumPy
   coefficient buffers, then validate the sampled coefficient after its loss
   update. Preserve arithmetic, failure recovery, and custom-array checks.
