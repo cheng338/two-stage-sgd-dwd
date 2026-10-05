@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Recover representable mean DWD losses when their intermediate sum overflows,
+  including objectives, validation and cross-validation scoring. Preserve
+  ordinary loss averages and reject genuinely nonfinite kernel objectives.
 - Validate prediction block sizes after fitting, including in the standalone
   RKHS-norm diagnostic. Reject invalid sizes before scoring can return
   unwritten output, and preserve valid predictions and fitted model state.

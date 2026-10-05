@@ -23,7 +23,7 @@ from sklearn.utils.validation import check_array
 
 from two_stage_sgd_dwd import KernelSGDDWD, LinearSGDDWD, SelectionError, TrainingError
 from two_stage_sgd_dwd import __version__ as _PACKAGE_VERSION
-from two_stage_sgd_dwd._core import dwd_loss, select_near_boundary
+from two_stage_sgd_dwd._core import _mean_finite_losses, dwd_loss, select_near_boundary
 from two_stage_sgd_dwd._estimators import _generator
 from two_stage_sgd_dwd._kernels import resolve_kernel
 
@@ -335,7 +335,7 @@ class FoldEvaluator:
             predicted = model.classes_[(scores >= 0).astype(int)]
             encoded = np.where(self._y[validation] == model.classes_[1], 1.0, -1.0)
             with np.errstate(over="raise", invalid="raise"):
-                loss = float(np.mean(dwd_loss(encoded * scores)))
+                loss = _mean_finite_losses(dwd_loss(encoded * scores))
             if not np.isfinite(loss):
                 raise FloatingPointError("Nonfinite cross-validation DWD loss")
             correct = int(np.sum(predicted == self._y[validation]))

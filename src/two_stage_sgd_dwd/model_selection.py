@@ -14,7 +14,7 @@ from sklearn.metrics import check_scoring
 from sklearn.model_selection import GridSearchCV, StratifiedKFold
 from sklearn.pipeline import Pipeline
 
-from ._core import dwd_loss
+from ._core import _mean_finite_losses, dwd_loss
 from ._estimators import TrainingError, TwoStageDWDClassifier
 
 
@@ -104,7 +104,7 @@ def neg_dwd_loss(estimator, X, y):
             or not np.isfinite(scores).all()):
         raise ValueError("decision_function must return one finite real score per label")
     encoded = np.where(labels == classes[1], 1.0, -1.0)
-    return _finite_score(-np.mean(dwd_loss(encoded * scores)))
+    return _finite_score(-_mean_finite_losses(dwd_loss(encoded * scores)))
 
 
 class _TrainedScorer:

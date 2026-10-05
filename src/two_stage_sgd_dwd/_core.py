@@ -81,6 +81,27 @@ def dwd_loss_derivative(u: ArrayLike) -> float | NDArray[np.float64]:
     return float(result) if margins.ndim == 0 else result
 
 
+def _mean_finite_losses(losses: ArrayLike) -> float:
+    """Average finite nonnegative losses without overflowing a finite mean.
+
+    Preserve ordinary reduction order whenever its sum is representable.
+    Reduction overflow is an internal event, not an output overflow, so it
+    does not invoke the caller's warning, callback or exception policy.
+    """
+    values = np.asarray(losses)
+    if (values.ndim != 1 or not values.size or values.dtype.kind not in "biuf"
+            or not np.isfinite(values).all() or np.any(values < 0)):
+        raise ValueError("losses must be a nonempty vector of finite nonnegative numbers")
+    with np.errstate(over="ignore"):
+        value = float(np.mean(values))
+    if not np.isfinite(value):
+        scale = float(np.max(values))
+        with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
+            value = scale * float(np.mean(values / scale))
+    _finite_result(value, "mean DWD loss")
+    return value
+
+
 def project_unit_ball(w: ArrayLike) -> NDArray[np.float64]:
     """Return the Euclidean projection of a vector onto the closed unit ball.
 

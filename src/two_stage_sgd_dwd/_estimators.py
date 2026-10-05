@@ -10,7 +10,7 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.utils.multiclass import check_classification_targets, unique_labels
 from sklearn.utils.validation import check_array, check_is_fitted, validate_data
 
-from ._core import (dwd_loss, kernel_batch_step, kernel_step, linear_batch_step,
+from ._core import (_mean_finite_losses, dwd_loss, kernel_batch_step, kernel_step, linear_batch_step,
                     linear_step, rbf_kernel, select_near_boundary)
 from ._cache import LazyKernelColumnCache
 from ._kernels import _TRUSTED, resolve_kernel
@@ -393,7 +393,7 @@ def _optimize_steps(kind, X, y, validation, rng, est, deadline, callback=None,
                                          getattr(est, "prediction_batch_size", 256), deadline,
                                          kernel_counter=kernel_counter,
                                          kernel_spec=getattr(est, "_kernel_spec_", None))
-                    value = float(np.mean(dwd_loss(yv * prediction)))
+                    value = _mean_finite_losses(dwd_loss(yv * prediction))
                     _check_deadline(deadline)
                     if not np.isfinite(value):
                         raise FloatingPointError("Nonfinite validation loss")
@@ -595,7 +595,7 @@ class LinearSGDDWD(_BaseDWD):
         """Return the mean normalized DWD loss for supplied labeled observations."""
         score = self.decision_function(X)
         encoded = _evaluation_labels(self, y, len(score))
-        return float(np.mean(dwd_loss(encoded * score)))
+        return _mean_finite_losses(dwd_loss(encoded * score))
 
 
 class KernelSGDDWD(_BaseDWD):
@@ -694,8 +694,10 @@ class KernelSGDDWD(_BaseDWD):
         """Evaluate mean loss plus the fitted function's RKHS penalty."""
         score = self.decision_function(X)
         encoded = _evaluation_labels(self, y, len(score))
-        return float(np.mean(dwd_loss(encoded * score)) +
-                     self.lambd_ * self.rkhs_norm_squared())
+        value = _mean_finite_losses(dwd_loss(encoded * score)) + self.lambd_ * self.rkhs_norm_squared()
+        if not np.isfinite(value):
+            raise NumericalFailure("Nonfinite DWD objective")
+        return float(value)
 
 
 def _evaluation_labels(est, y, n):
