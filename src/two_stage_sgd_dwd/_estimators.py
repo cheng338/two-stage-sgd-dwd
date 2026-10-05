@@ -624,9 +624,9 @@ class KernelSGDDWD(_BaseDWD):
     updates are unchanged; wall-time-limited fits may reach a different update.
     optimizer_backend follows LinearSGDDWD. The native path additionally
     requires an analytic built-in kernel; automatic fallback is reported.
-    prediction_backend='direct' preserves direct-distance RBF scoring. 'blas'
-    opts into guarded matrix-product RBF prediction; floating-point scores can
-    differ. Other kernels and zero-width RBF retain their original paths.
+    prediction_backend='blas' defaults to guarded matrix-product RBF prediction.
+    'direct' preserves direct-distance scoring; floating-point scores can differ
+    between backends. Other kernels and zero-width RBF retain their original paths.
     This option affects prediction, not fitting or validation checkpoints.
     """
     def __init__(self, *, lambd=1e-6, kernel="rbf", gamma="scale",
@@ -634,7 +634,7 @@ class KernelSGDDWD(_BaseDWD):
                  sampling="with_replacement", max_epochs=200,
                  validation_interval=5, patience=3, min_epochs=10, tol=1e-4,
                  stopping="auto", random_state=None, max_seconds=None, prediction_batch_size=256,
-                 prediction_backend="direct", kernel_cache_bytes=0, optimizer_backend="python"):
+                 prediction_backend="blas", kernel_cache_bytes=0, optimizer_backend="python"):
         self.lambd = lambd
         self.kernel = kernel
         self.gamma = gamma
@@ -719,8 +719,8 @@ class TwoStageDWDClassifier(_BaseDWD):
     in KernelSGDDWD; the linear stage does not use this cache.
     optimizer_backend applies to both stages. stage_diagnostics_ reports each
     actual backend; optimizer_backend_ is 'mixed' if stage paths differ.
-    prediction_backend='direct' or 'blas' follows KernelSGDDWD and affects only
-    kernel-stage prediction. The top-level choice also applies after fitting.
+    prediction_backend='blas' (the default) or 'direct' follows KernelSGDDWD and
+    affects only kernel-stage prediction. The top-level choice also applies after fitting.
     """
     def __init__(self, *, retention_fraction=0.3, lambd=1e-6,
                  kernel="rbf", gamma="scale", kernel_kws=None,
@@ -728,7 +728,7 @@ class TwoStageDWDClassifier(_BaseDWD):
                  max_epochs=200, validation_interval=5, patience=3, min_epochs=10,
                  tol=1e-4, stopping="auto", random_state=None, max_seconds=None,
                  linear_max_seconds=None, prediction_batch_size=256,
-                 prediction_backend="direct", kernel_cache_bytes=0, optimizer_backend="python"):
+                 prediction_backend="blas", kernel_cache_bytes=0, optimizer_backend="python"):
         self.retention_fraction = retention_fraction
         self.lambd = lambd
         self.kernel = kernel

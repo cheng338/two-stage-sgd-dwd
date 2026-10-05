@@ -160,8 +160,9 @@ controls, seeds, library versions, native-thread settings, and hardware.
 
 ## RBF prediction
 
-`KernelSGDDWD` and `TwoStageDWDClassifier` accept
-`prediction_backend="direct"` (the default) or `"blas"`. This is separate from
+New `KernelSGDDWD` and `TwoStageDWDClassifier` instances use
+`prediction_backend="blas"` by default. Set `prediction_backend="direct"`
+to select direct squared distances explicitly. This is separate from
 `optimizer_backend`: it changes public prediction only, including scores used
 by `predict`, `score`, or explicit objective evaluation. The optimizer,
 screening, training kernel values, and validation-checkpoint calculations keep
@@ -170,7 +171,7 @@ or modify model coefficients. The two-stage model's top-level setting controls
 its kernel prediction without modifying the nested estimator.
 
 Direct prediction retains squared Euclidean differences computed by SciPy
-`cdist`. The BLAS option evaluates the same positive-width RBF formula through
+`cdist`. The BLAS backend evaluates the same positive-width RBF formula through
 matrix products in bounded prediction blocks. It falls back to direct
 calculation for numerically hazardous distances or uncertain near-zero scores.
 These are conservative engineering guards, not a mathematical certificate of
@@ -178,9 +179,22 @@ identical scores or labels for all finite inputs. Floating-point reduction
 order differs, so bitwise equality is not promised. Non-RBF kernels and
 zero-width RBF use their existing direct routes even when `"blas"` is selected.
 
+The loss term in `KernelSGDDWD.objective(X, y)` uses the selected prediction
+backend, so the reported objective can reflect its score rounding. The RKHS
+norm calculation retains its original path; fitting and validation checkpoints
+do not use the BLAS prediction helper.
+
 The option requires NumPy/SciPy's ordinary numerical libraries, not the optional
 compiled SGD extension. It creates no persistent prediction cache; temporary
 arrays are discarded when the call returns. `prediction_batch_size` still
 bounds the query block size. Serialized models from before this option existed
-default to direct prediction. Compare complete prediction calls on the intended
-data and numerical environment before making performance claims.
+continue to use direct prediction. Models saved with an explicit backend retain
+that choice, including `"direct"`; loading an existing model does not adopt the
+new constructor default.
+
+Prediction comparisons on 30 saved MNIST models found substantial BLAS gains
+under both AOCL and Intel MKL, with no changed labels in either environment.
+Decision scores can differ in their last digits, including between numerical
+libraries when both use direct prediction. See [validation results](../VALIDATION.md)
+for the measured workloads and safeguards. Compare complete prediction calls
+on the intended data and numerical environment before making performance claims.

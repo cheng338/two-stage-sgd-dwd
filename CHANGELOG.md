@@ -34,10 +34,11 @@
   other versions and custom generators. Preserve single-observation updates,
   learning rates, epoch budgets, and failed-update RNG restoration.
 
-- Add optional `prediction_backend="blas"` for guarded matrix-product RBF
-  prediction in the kernel and two-stage estimators. Retain `"direct"` as the
-  default, including predictions from older saved models. Preserve training,
-  checkpoint calculations, and existing non-RBF prediction paths.
+- Use `prediction_backend="blas"` by default for new kernel and two-stage
+  estimators, with guarded matrix-product RBF prediction. Keep `"direct"`
+  available explicitly. Preserve saved backend choices and direct prediction
+  for older models lacking the option. Training, checkpoint calculations,
+  non-RBF kernels, and zero-width RBF prediction paths are unchanged.
 - Recompute suspicious distances and uncertain score signs directly. Document
   floating-point score differences, bounded prediction buffers, and measured
   prediction performance separately from training performance.

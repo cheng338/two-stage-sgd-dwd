@@ -44,23 +44,37 @@ def direct_reference(model, X):
 
 
 @pytest.mark.parametrize("kind", ["kernel", "two_stage"])
-def test_default_clone_and_unchanged_direct_scores(kind):
+def test_default_blas_dispatch_clone_and_explicit_direct_scores(kind, monkeypatch):
     X, y = data()
     model = estimator(kind)
-    assert model.get_params()["prediction_backend"] == "direct"
-    assert clone(model).prediction_backend == "direct"
-    assert clone(model.set_params(prediction_backend="blas")).prediction_backend == "blas"
-    model.set_params(prediction_backend="direct").fit(X, y)
+    assert model.get_params()["prediction_backend"] == "blas"
+    assert clone(model).prediction_backend == "blas"
+    model.fit(X, y)
+    original = _estimators.rbf_prediction_scores_blas
+    calls = []
+
+    def tracked(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(_estimators, "rbf_prediction_scores_blas", tracked)
+    assert_allclose(model.decision_function(X + 0.03), direct_reference(model, X + 0.03),
+                    rtol=1e-12, atol=1e-14)
+    assert len(calls) == 1
+    assert kernel_stage(model).prediction_backend == "blas"
+    assert clone(model.set_params(prediction_backend="direct")).prediction_backend == "direct"
+    model.fit(X, y)
     actual, expected = model.decision_function(X), direct_reference(model, X)
     assert actual.tobytes() == expected.tobytes()
     assert kernel_stage(model).prediction_backend == "direct"
+    assert len(calls) == 1
     assert "prediction_backend" not in LinearSGDDWD().get_params()
 
 
 @pytest.mark.parametrize("kind", ["kernel", "two_stage"])
 def test_positive_rbf_dispatch_and_postfit_switch_do_not_mutate_nested_state(kind, monkeypatch):
     X, y = data()
-    model = estimator(kind).fit(X, y)
+    model = estimator(kind, prediction_backend="direct").fit(X, y)
     direct = model.decision_function(X)
     seen = []
     expected = np.linspace(-0.75, 0.75, len(X))
@@ -99,8 +113,8 @@ def test_fast_prediction_is_excluded_from_training_checkpoint_and_norm(kind, bat
     monkeypatch.setattr(_estimators, "rbf_prediction_scores_blas", unexpected)
     controls = dict(batch_size=batch_size, validation_interval=1, min_epochs=0,
                     stopping="validation")
-    direct = estimator(kind, **controls).fit(X, y, validation_data=(X, y))
-    accelerated = estimator(kind, prediction_backend="blas", **controls).fit(
+    direct = estimator(kind, prediction_backend="direct", **controls).fit(X, y, validation_data=(X, y))
+    accelerated = estimator(kind, **controls).fit(
         X, y, validation_data=(X, y), checkpoint_callback=lambda *args: callbacks.append(args))
     assert callbacks
     assert kernel_stage(accelerated).prediction_backend == "blas"
@@ -130,7 +144,7 @@ def test_fast_prediction_is_excluded_from_training_checkpoint_and_norm(kind, bat
                                       dict(kernel=linear_kernel), dict(gamma=0.0)])
 def test_other_kernel_and_zero_width_routes_keep_direct_behavior(kind, settings, monkeypatch):
     X, y = data()
-    model = estimator(kind, prediction_backend="blas", **settings).fit(X, y)
+    model = estimator(kind, **settings).fit(X, y)
 
     def unexpected(*args, **kwargs):
         raise AssertionError("Nonpositive RBF or another kernel reached fast RBF prediction")
@@ -157,13 +171,15 @@ def test_invalid_backend_is_rejected_at_fit_and_after_fitting(kind, invalid, mon
 
 
 @pytest.mark.parametrize("kind", ["kernel", "two_stage"])
-def test_old_serialized_models_default_to_direct_without_state_mutation(kind, monkeypatch):
+@pytest.mark.parametrize("missing_backend", [False, True])
+def test_serialized_direct_models_keep_behavior_without_state_mutation(kind, missing_backend, monkeypatch):
     X, y = data()
-    model = estimator(kind).fit(X, y)
+    model = estimator(kind, prediction_backend="direct").fit(X, y)
     expected = model.decision_function(X)
-    del model.prediction_backend
-    if kind == "two_stage":
-        del model.kernel_estimator_.prediction_backend
+    if missing_backend:
+        del model.prediction_backend
+        if kind == "two_stage":
+            del model.kernel_estimator_.prediction_backend
     restored = pickle.loads(pickle.dumps(model))
     before = pickle.dumps(restored)
 
@@ -173,7 +189,7 @@ def test_old_serialized_models_default_to_direct_without_state_mutation(kind, mo
     monkeypatch.setattr(_estimators, "rbf_prediction_scores_blas", unexpected)
     assert restored.decision_function(X).tobytes() == expected.tobytes()
     assert pickle.dumps(restored) == before
-    assert not hasattr(restored, "prediction_backend")
+    assert hasattr(restored, "prediction_backend") == (not missing_backend)
 
 
 @pytest.mark.parametrize("kind", ["kernel", "two_stage"])
@@ -201,7 +217,8 @@ def test_public_fittedness_and_feature_validation_stay_in_place(kind, monkeypatc
 @pytest.mark.parametrize("kind", ["kernel", "two_stage"])
 def test_fast_prediction_runs_without_native_optimizer_import_and_roundtrips(kind, monkeypatch):
     X, y = data()
-    model = estimator(kind, prediction_backend="blas", optimizer_backend="python").fit(X, y)
+    model = estimator(kind, optimizer_backend="python").fit(X, y)
+    assert model.prediction_backend == "blas"
     from two_stage_sgd_dwd import _native_optimizer
 
     def unexpected(*args, **kwargs):
@@ -226,9 +243,10 @@ def test_native_fitting_does_not_call_fast_prediction(kind, monkeypatch):
         raise AssertionError("Native fitting called public fast prediction")
 
     monkeypatch.setattr(_estimators, "rbf_prediction_scores_blas", unexpected)
-    direct = estimator(kind, optimizer_backend="native", kernel_cache_bytes=256).fit(X, y)
-    fast = estimator(kind, optimizer_backend="native", kernel_cache_bytes=256,
-                     prediction_backend="blas").fit(X, y)
+    direct = estimator(kind, optimizer_backend="native", kernel_cache_bytes=256,
+                       prediction_backend="direct").fit(X, y)
+    fast = estimator(kind, optimizer_backend="native", kernel_cache_bytes=256).fit(X, y)
+    assert fast.prediction_backend == "blas"
     assert_array_equal(kernel_stage(direct).dual_coef_, kernel_stage(fast).dual_coef_)
     assert_array_equal(kernel_stage(direct).intercept_, kernel_stage(fast).intercept_)
     assert kernel_stage(direct).rng_state_ == kernel_stage(fast).rng_state_

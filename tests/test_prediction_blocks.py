@@ -22,7 +22,8 @@ class PredictionBlockTests(unittest.TestCase):
         self.X = rng.normal(size=(12, 3))
         self.y = np.tile([-1, 1], 6)
         self.query = rng.normal(size=(11, 3))
-        self.model = KernelSGDDWD(gamma=0.4, max_epochs=2, random_state=8).fit(self.X, self.y)
+        self.model = KernelSGDDWD(gamma=0.4, max_epochs=2, random_state=8,
+                                 prediction_backend="direct").fit(self.X, self.y)
 
     @staticmethod
     def original(model, X):
@@ -38,7 +39,8 @@ class PredictionBlockTests(unittest.TestCase):
 
     def test_exact_scores_across_blocks_and_both_estimators(self):
         two_stage = TwoStageDWDClassifier(retention_fraction=1.0, gamma=0.4,
-                                          max_epochs=2, random_state=8).fit(self.X, self.y)
+                                          max_epochs=2, random_state=8,
+                                          prediction_backend="direct").fit(self.X, self.y)
         for model in (self.model, two_stage):
             kernel = getattr(model, "kernel_estimator_", model)
             for size in (1, 2, 4, 11, 256):

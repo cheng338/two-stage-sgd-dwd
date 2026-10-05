@@ -281,15 +281,19 @@ batch policy. The optimizer's `batch_size` is separate from
 kernel updates use bounded scoring blocks with frozen parameters and retain
 no full Gram cache. An interrupted batch is not partially committed.
 
-`KernelSGDDWD` and `TwoStageDWDClassifier` default to
-`prediction_backend="direct"`. The opt-in `"blas"` setting uses guarded
-matrix-product distances for positive-width RBF prediction. Other kernels and
-zero-width RBF keep their existing scoring paths. Training, screening and
-validation checkpoints are unchanged; no compiled SGD extension is required.
-The setting can be changed on a fitted model without refitting. Floating-point
-scores can differ from direct distances. Cancellation and near-zero-score
-fallbacks are engineering safeguards, not a universal label-equivalence
-certificate. See [prediction details](docs/optimizer-backends.md#rbf-prediction).
+New `KernelSGDDWD` and `TwoStageDWDClassifier` instances default to
+`prediction_backend="blas"`, using guarded matrix-product distances for
+positive-width RBF prediction. Set `prediction_backend="direct"` to use
+direct squared distances. Other kernels and zero-width RBF keep their existing
+scoring paths. Training, screening and validation checkpoints are unchanged;
+no compiled SGD extension is required.
+The setting can be changed on a fitted model without refitting. Older saved
+models that lack this option continue to use direct prediction, and explicitly
+saved backend choices are preserved. Floating-point scores can differ between
+backends. Cancellation and near-zero-score fallbacks recompute directly; they
+are engineering safeguards, not a universal label-equivalence certificate.
+See [prediction details](docs/optimizer-backends.md#rbf-prediction) and the
+AOCL/MKL comparisons in [VALIDATION.md](VALIDATION.md).
 
 The dissertation currently states independent single-point sampling. See the
 [alignment note](docs/dissertation-batch-alignment.md) for the required sampling,

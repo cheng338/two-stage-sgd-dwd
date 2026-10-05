@@ -1,6 +1,6 @@
 """Bounded RBF prediction for already validated public query features.
 
-Only public prediction opts into this helper. Training, validation checkpoints,
+Only public prediction uses these helpers. Training, validation checkpoints,
 deadlines, and kernel diagnostics retain their original evaluation path.
 """
 from __future__ import annotations
@@ -72,7 +72,7 @@ def _distance_rows_to_kernel(distances, width):
 
 
 def rbf_prediction_scores_blas(X, basis, coefficients, intercept, gamma, batch_size):
-    """Opt-in norm/dot RBF prediction with conservative direct fallbacks.
+    """Norm/dot RBF prediction with conservative direct fallbacks.
 
     The formula is unchanged, but BLAS reduction order need not reproduce the
     direct helper's score bytes. Dimension-scaled uncertainty envelopes are

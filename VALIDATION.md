@@ -1,3 +1,61 @@
+# Development evidence — guarded BLAS prediction default
+
+New `KernelSGDDWD` and `TwoStageDWDClassifier` instances use
+`prediction_backend="blas"` for guarded positive-width RBF prediction.
+Explicit `"direct"` remains available; saved backend choices and direct
+prediction for older models lacking this option are preserved. Other kernels,
+zero-width RBF, training updates and validation checkpoints are unchanged.
+
+On October 5, 2026, fresh prediction comparisons used the same 30 fitted MNIST
+models: ten original training draws for each of pairs 2–3, 4–9 and 3–8.
+Historical models were reconstructed and checked against saved score and label
+hashes in `py12_df_aocl`, then loaded without refitting in `py12_df`.
+Each model used identical fitted state for the last-study direct implementation,
+current direct implementation and guarded BLAS backend. Each environment timed
+12 calls per model and route, **1,080 calls in total**, using all six route
+orders twice, one numerical-library thread and 1,024-row prediction blocks.
+Timings included the warm complete prediction pipeline, scaling and labels;
+fitting, loading, correctness checks, warmup and I/O were excluded.
+
+Guarded BLAS was **7.585× faster** than the last-study direct implementation
+under AOCL. Under Intel MKL it was **5.775× faster** than current direct and
+**5.846× faster** than last-study direct. All 30 models and every timed call
+preserved the historical labels and accuracy in both environments. These are
+within-environment prediction comparisons; the two sessions do not establish
+a controlled ranking of BLAS vendors or a training-speed result.
+
+Both environments used Python 3.12.14, NumPy 2.5.2, SciPy 1.18.0 and
+scikit-learn 1.9.0 on the same AMD 9955HX. The loaded BLAS libraries were
+AOCL 5.2.0 and Intel MKL 2025.3. Independent checks recomputed saved accuracy,
+errors, confusion matrices, model-level sample standard deviations and timing
+summaries, and verified source, runtime, model, data and prediction hashes.
+
+Under MKL, **84 focused prediction tests and 68 subtests** passed. An additional
+**72 combined high-dimensional and boundary cases** passed under both runtimes:
+257/784 features, odd basis counts, large common offsets, signed near-zero
+scores, and coefficients scaled from 1e-320 to 1e16. All tested labels matched;
+guarded target blocks matched direct scores byte for byte. Coverage includes
+old-model loading, explicit backend selection, layouts, bounded buffers,
+overflow, underflow and direct recomputation.
+
+The two direct implementations matched score bytes within each environment,
+but direct scores differed between AOCL and MKL by up to approximately
+9.24e-14. Within MKL, guarded BLAS differed from direct by up to approximately
+6.97e-14. Extreme coefficient tests can have larger absolute score differences
+away from guarded blocks. These safeguards and measured label agreement do not
+promise identical scores or labels for every input or numerical library.
+
+These measurements validate the existing guarded prediction implementation;
+they precede the default change. The subsequent default-change regression
+checks passed **605 tests and 9,160 subtests** with the native extension in
+each of the AOCL and MKL environments. The portable package passed **535 tests
+and 4,807 subtests**, with 70 native-only tests skipped. Each run retained the
+existing warning from the invalid-label fixture and had no failures.
+These checks cover default dispatch and cloning, explicit direct selection,
+saved models with and without a backend attribute, non-RBF routing, and
+unchanged Python/native training states and validation checkpoints.
+Historical study outputs and earlier validation records are unchanged.
+
 # Development verification — native epoch RNG snapshot reuse
 
 On October 5, 2026, independent epoch RNG snapshot reuse passed **603 tests
@@ -338,7 +396,12 @@ the fast path therefore uses a narrow version/type guard. Other versions
 receive scalar fallback and should not expect this speedup. Historical study
 outputs are unchanged. See [optimizer details](docs/optimizer-backends.md).
 
-# Development verification — optional BLAS RBF prediction
+# Historical development verification — optional BLAS RBF prediction
+
+This section records the October 4 introduction of BLAS as an opt-in backend,
+when direct prediction was the default. The default for new instances now
+uses guarded BLAS, as described above; the measurements below retain their
+original implementation and protocol scope.
 
 On October 4, 2026, the optional prediction backend passed **534 tests and
 5,599 subtests** with the released native extension and **509 tests and 2,959
@@ -374,8 +437,9 @@ increased by about 0.03 MiB at block size 256 and 0.04–0.08 MiB at block size
 test-query diagnostics recorded no direct-distance fallbacks on these models.
 Separate adversarial tests exercise the fallback paths.
 
-Direct prediction remains the default. The opt-in backend changes floating-point
-reduction order; its safeguards and observed label agreement are not universal
+At this validation stage, direct prediction remained the default. The BLAS
+backend changes floating-point reduction order; its safeguards and observed
+label agreement are not universal
 equivalence certificates across inputs or BLAS builds. Training and its update
 rules are unchanged. Explicit postfit objective evaluation can reflect the
 chosen prediction backend's score rounding. The recorded study results remain
