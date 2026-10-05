@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 - 2026-10-05
 
 - Call BLAS directly for ordinary float64 dot products in the compiled scalar
   optimizer through a guarded SciPy interface. Retain NumPy dispatch for

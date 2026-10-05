@@ -81,7 +81,7 @@ Two-stage fitting resolves scale on the complete training fold before selecting
 rows. The default is `gamma="scale"`, as in `ensemble-dwd`; it is a
 data-dependent starting value, not a statistically optimal bandwidth guarantee.
 
-`lambd` is the sole regularization parameter in version 0.7.0 and
+`lambd` is the sole regularization parameter in version 0.8.0 and
 means `mean_loss + lambd * ||h||^2`, as in `dwd`. Python reserves the word `lambda`,
 so the argument is spelled `lambd`. Its default is **1e-6**, matching the
 ensemble package's starting value. The fitted value is `lambd_`.
@@ -486,7 +486,7 @@ cited in the [overview](#overview). When using the package, cite the dissertatio
 and the software version:
 
 > Cheng, Chang (2026). *two-stage-sgd-dwd: Two-Stage DWD via Stochastic
-> Gradient Descent*, version 0.7.0 [Computer software].
+> Gradient Descent*, version 0.8.0 [Computer software].
 
 Machine-readable citations are provided in [CITATION.cff](CITATION.cff)
 and [BibTeX format](docs/references.bib). Input filenames and checksums are
