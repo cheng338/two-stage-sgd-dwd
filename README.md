@@ -328,9 +328,10 @@ shuffled = TwoStageDWDClassifier(
 )
 ```
 
-The defaults are `batch_size=1, sampling="with_replacement"`, preserving the
-dissertation's single-point sampling policy. At fixed hyperparameters and
-seeds, the single-point update retains the earlier solver's formula and sequence.
+The defaults are `batch_size=1, sampling="with_replacement"`, matching the
+single-observation sampling used in Chapter 5 of the October 4, 2026
+dissertation. At fixed hyperparameters and seeds, the single-point update
+retains the earlier solver's formula and sequence.
 Independent uniform draws
 allow repeats and omissions within an epoch. An integer batch size equal
 to the fitting-set size is a random multiset, whereas `"full"` is the complete
@@ -369,10 +370,11 @@ are engineering safeguards, not a universal label-equivalence certificate.
 See [prediction details](docs/optimizer-backends.md#rbf-prediction) and the
 AOCL/MKL comparisons in [VALIDATION.md](VALIDATION.md).
 
-The dissertation currently states independent single-point sampling. See the
-[alignment note](docs/dissertation-batch-alignment.md) for the required sampling,
-update, and theory distinctions when describing optional batches or shuffling.
-No sampling-policy revision is needed to describe the unchanged default.
+Sections 3.1 and 3.2 of the October 4 dissertation explicitly permit averaged
+batch updates, including full-gradient updates. The reported Chapter 5 study
+uses single-observation updates with replacement; it does not use optional
+shuffling. See the [alignment note](docs/dissertation-batch-alignment.md) for
+the batch equations, learning-rate clock, and sampling and proof distinctions.
 The package remains **binary only**; multiclass DWD is not implemented here.
 
 # Optimizer backends and lazy kernel columns
@@ -456,14 +458,16 @@ be strings or numbers; `classes_[0]` maps internally to -1 and `classes_[1]`
 to +1. A zero decision score predicts `classes_[1]`. This zero convention follows
 the dissertation and may differ from other DWD packages.
 
-The estimators do **not** scale data automatically. The prescribed MNIST study
-uses float64 pixels divided by 255. Other transformations change the geometry
-and must be chosen explicitly. `Pipeline` and `GridSearchCV` work for ordinary
+The estimators do **not** scale data automatically. The original October 1
+guide and standalone `examples/tune_mnist.py` use float64 pixels divided by 255.
+The completed Chapter 5 study centers and scales features using only the
+fitting observations, separately within each cross-validation training fold.
+Preprocessing changes the geometry and must be chosen explicitly.
+`Pipeline` and `GridSearchCV` work for ordinary
 training-only cross-validation. If an external pipeline transforms X, any
 explicit `validation_data` must already be transformed consistently using only
 the fitted training transformer; sklearn Pipeline does not transform that
-fit argument automatically. The prescribed MNIST division requires no fitted
-transformer.
+fit argument automatically. Division by 255 itself requires no fitted transformer.
 
 For a very small training set, 5% may retain only one class. The estimator
 reports this selection failure without adding observations or changing the model.
@@ -555,7 +559,7 @@ train/validation splits, or execute experiments at import time.
 
 # Basis and citation
 
-The implementation follows Chapter 3 of the October 1, 2026 manuscript revision
+The implementation follows Chapter 3 of the October 4, 2026 manuscript revision
 cited in the [overview](#overview). When using the package, cite the dissertation
 and the software version:
 

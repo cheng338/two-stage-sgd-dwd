@@ -1,17 +1,21 @@
 # Batch sampling and dissertation alignment
 
-The package defaults are `batch_size=1, sampling="with_replacement"`.
-They preserve the dissertation's single-observation SGD algorithm: sample one
-fitting index uniformly and independently at each update. No sampling revision
-to the dissertation is needed for these defaults. The linear and kernel
-objectives, free intercepts, and two-stage selection rule remain unchanged.
+The October 4, 2026 dissertation explicitly permits single-observation and
+averaged batch updates in Sections 3.1 and 3.2 (PDF pages 31 and 33-34),
+including full-gradient updates. Its Chapter 5 study uses
+`batch_size=1, sampling="with_replacement"`, matching the package defaults:
+sample one fitting index uniformly and independently at each update.
+The linear and kernel objectives, free intercepts, and two-stage selection
+rule remain unchanged.
 The package's retention default is 30%, matching the ensemble package; the
 original guide's 5% is an explicit alternative outside the recommended grid.
 Reports must state the retention used independently of the sampling policy.
-Minibatches, shuffled sampling, and full-gradient updates are optional
-extensions. This note records their mathematical meaning and the dissertation
-changes needed only if those extensions are used. It does not edit the
-dissertation or establish a new theoretical result.
+Minibatches and full-gradient updates are optional package settings already
+covered by the methodology. Shuffled sampling is a separate optional policy
+that changes the independent-sampling assumption and was not used in the
+reported Chapter 5 study. This note records the update equations and the
+reporting and proof distinctions; it does not edit the dissertation or
+establish a new theoretical result.
 
 ## Regularization convention
 
@@ -19,8 +23,10 @@ From version 0.4.0, the sole public regularization argument is `lambd`, the
 same convention as `dwd`: mean DWD loss + lambd * ||h||_H^2. Python reserves
 the word `lambda`, so the API uses `lambd`. Version 0.5.0 adopts the MNIST
 starting default `lambd=1e-6` from the ensemble DWD package.
-The supplied dissertation and guide instead write the squared-norm term as
-lambda_dissertation/2 * ||h||_H^2. For the same objective, use
+Section 3.2 of the dissertation and the original handoff guide write the
+squared-norm term as lambda_dissertation/2 * ||h||_H^2. Chapter 5 explicitly
+states the conversion lambda_dissertation = 2 * lambda_pkg. For the same
+objective, use
 
 ```text
 lambda_new = lambda_dissertation / 2
@@ -31,9 +37,8 @@ This is a coefficient conversion, not a change of model. Version 0.4.0 halved
 its default and search-grid values to preserve their previous effective
 strengths. Version 0.5.0 makes a separate, intentional change to the MNIST
 starting defaults and ranges, already expressed in the `lambd` convention.
-In package-based dissertation descriptions, either state this conversion
-explicitly or consistently adopt the new coefficient in the objective,
-gradient, shrinkage, learning-rate bound, and reported settings. Original
+Keep this conversion consistent across the objective, gradient, shrinkage,
+learning-rate bound, and reported settings, as in Chapter 5. Original
 guide and dissertation files remain unchanged. The unit-ball-constrained
 linear stage has no regularization parameter.
 
@@ -57,8 +62,9 @@ The full-batch option determines coverage independently of `sampling`.
 uniform random permutation of the m fitting indices and split it into
 nonoverlapping consecutive batches. Every observation occurs exactly once per
 completed epoch. With `batch_size=1`, these are single-observation updates in
-a newly shuffled order. This option changes the dissertation's sampling
-assumptions even when the batch size is one.
+a newly shuffled order. This option differs from Chapter 5's sampling and
+from the independent draws used in Chapter 3's unbiased-gradient statements,
+even when the batch size is one.
 
 `batch_size=1, sampling="with_replacement"` reproduces the former
 implementation numerically after the coefficient conversion above, with
@@ -68,10 +74,11 @@ Wall-clock caps need not stop at the
 same update across executions. The optional `sampling="shuffle"` does
 not reproduce the former trajectory merely by using the same seed.
 
-The supplied `GUIDE.md`, lines 207-211, explicitly allows a separate
+The original portable handoff's `GUIDE.md`, lines 207-211, allowed a separate
 minibatch option with averaged gradients and regularization once per update.
-It identifies batch size one as the primary method; an optional variant must
-be named explicitly in any subsequent experiment.
+It identified batch size one as the primary method. This is historical guide
+context; the October 4 methodology already includes batch updates. State the
+actual batch and sampling settings in any subsequent experiment.
 
 ## Batch update equations
 
@@ -108,8 +115,9 @@ optimizer step. No full Gram matrix is mathematically required.
 
 ## Epochs, learning rate, and accounting
 
-Let s_k be the number of observations processed before update k, counting
-repeated draws in replacement mode. Use
+Chapter 3 permits a decaying learning rate of the implementer's choice. Let
+s_k be the number of observations processed before update k, counting
+repeated draws in replacement mode. The package uses
 
 ```text
 eta_k = (1/B) * (1 + s_k/m)^(-3/4)
@@ -124,10 +132,10 @@ averaged batch losses; batch size does not require multiplying the step size.
 
 An epoch is m processed observations: one complete permutation under shuffle,
 m independent draws under replacement, or one full-gradient update in full
-mode. With batch size one, s_k = k and this is exactly the guide's original
-schedule. For larger batches, the decay is indexed by processed passes rather
-than the number of optimizer updates. Validation and patience remain indexed
-by epochs, with the same checkpoint rules.
+mode. With batch size one, s_k = k and this matches the schedule reported in
+Chapter 5 and the original guide. For larger batches, the decay is indexed by
+processed passes rather than the number of optimizer updates. Validation and
+patience remain indexed by epochs, with the same checkpoint rules.
 
 Report actual processed observations, parameter updates, epochs, batch size,
 sampling mode, and stage fitting size separately. A completed epoch has
@@ -137,22 +145,23 @@ progress, runtime, or convergence. Full mode is gradient descent on the same
 objective. Historical single-observation operation counts need corresponding
 batch-size and kernel-evaluation accounting before being reused.
 
-## Dissertation changes only for optional variants
+## Reporting batch variants and theoretical claims
 
-For the default, retain the sampling paragraphs in Sections 3.1 and 3.2,
-represented by lines 33-37 and 83-87 of
-`reference/methodology-sections.txt`, and their single-index update equations.
-They already specify the implemented independent replacement sampling.
+Sections 3.1 and 3.2 of the October 4 dissertation already give the averaged
+batch updates, with single-index updates recovered at r = 1. The older
+`reference/methodology-sections.txt` excerpt, including its sampling paragraphs
+at lines 33-37 and 83-87, is historical and does not describe the full current
+methodology.
 When comparing coefficient values or writing the update equations in package
 notation, apply the regularization conversion above.
 
-If replacement minibatches are used, describe their independent draws and add
-the averaged batch equations above, with the single-index equations recovered
-at r = 1. Report actual batch lengths, processed observations, parameter
+If replacement minibatches are used, describe their independent draws and use
+the averaged batch equations already present in the methodology and reproduced
+above. Report actual batch lengths, processed observations, parameter
 updates, the samples-processed learning-rate index, and epoch/checkpoint
 definitions. Update any complexity or finite-iteration statement whose counts
-depend on single-observation updates. These additions are unnecessary merely
-because the library exposes an unused minibatch option.
+depend on single-observation updates. These reporting changes are unnecessary
+merely because the library exposes an unused minibatch option.
 
 If shuffled sampling is used, revise the relevant sampling description to
 state fresh permutations and nonoverlapping batches. Any theoretical claim
@@ -163,7 +172,7 @@ update per epoch, rather than single-observation SGD.
 Under independent replacement sampling, conditional on the training history,
 the expected batch gradient equals the full average-loss gradient at the
 current iterate; the kernel regularizer is applied once. Thus the default retains
-the conditional-unbiasedness property stated in the excerpt. Under the
+the conditional-unbiasedness property stated in Chapter 3. Under the
 optional random-reshuffling scheme,
 later batches are drawn from the remaining observations, and the current
 iterate depends on observations already processed. Their gradients are not

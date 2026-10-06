@@ -98,10 +98,12 @@ assumptions preserved or a separate reshuffling analysis. See
 
 The averaged-gradient rule and optional reshuffled batching convention are described
 in [Dive into Deep Learning, Section 12.5](https://d2l.ai/chapter_optimization/minibatch-sgd.html).
-The implementation guide allows averaged mini-batches with regularization once,
-while its primary experiment specifies batch size one. This default is
-preserved. No experimental protocol has been frozen or executed with the
-optional batch or reshuffling modes.
+Sections 3.1 and 3.2 of the October 4, 2026 dissertation already permit averaged
+batch updates with one projection or regularization update. Its Chapter 5
+six-classifier study uses batch size one and independent replacement sampling,
+as does the original implementation guide's primary experiment. The package
+default is unchanged. That study does not establish results for optional
+minibatch, full-gradient or reshuffling modes.
 
 ## Schedule and checkpoint selection
 

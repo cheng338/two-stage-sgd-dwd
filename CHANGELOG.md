@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Align batch-methodology and study-status documentation with the October 4
+  dissertation: averaged batch updates are already permitted, while the
+  completed replicated study uses single-observation updates with replacement.
+  Keep historical guide settings distinct from the reported study.
 - Use extended Windows paths for adaptive MNIST output and checkpoint I/O,
   including temporary files, run locks, implementation snapshots, resume and
   qualified-selection reads. Preserve caller-supplied paths and lock messages,
