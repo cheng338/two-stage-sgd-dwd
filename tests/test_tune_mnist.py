@@ -55,7 +55,7 @@ class Scores:
         self.execution_identity = _RUNNER.execution_identity(controls['optimizer_backend'])
         return SimpleNamespace(evaluate=self.evaluate)
 
-    def evaluate(self, params):
+    def evaluate(self, params, *, completed_folds=None, on_fold_completed=None):
         self.calls.append(copy.deepcopy(params))
         key = 'control' if params['gamma'] == 'scale' else (params['lambd'], params['gamma'])
         if key == self.fail_once:
@@ -71,6 +71,11 @@ class Scores:
         score = score if eligible else None
         folds = [{'fold': index, 'accuracy': score, 'eligible': eligible,
                   'status': 'trained' if eligible else 'single_class_selection'} for index in range(2)]
+        prefix = copy.deepcopy(completed_folds or [])
+        folds[:len(prefix)] = prefix
+        if on_fold_completed is not None:
+            for fold in folds[len(prefix):]:
+                on_fold_completed(copy.deepcopy(fold))
         return {'params': copy.deepcopy(params), 'mean_score': score,
                 'eligible': eligible, 'folds': folds,
                 'execution_identity': copy.deepcopy(self.execution_identity)}
@@ -446,8 +451,8 @@ def test_evaluator_identity_disagreement_is_not_committed(tmp_path):
     args, fake = arguments(tmp_path), Scores()
     evaluate = fake.evaluate
 
-    def mismatched(params):
-        record = evaluate(params)
+    def mismatched(params, **kwargs):
+        record = evaluate(params, **kwargs)
         record['execution_identity']['package_version'] = 'different'
         return record
 
@@ -468,9 +473,9 @@ def test_exact_adjacent_candidates_survive_interruption_and_resume(tmp_path):
     original = fake.evaluate
     interrupted = False
 
-    def evaluate(params):
+    def evaluate(params, **kwargs):
         nonlocal interrupted
-        result = original(params)
+        result = original(params, **kwargs)
         if (params['gamma'] == 1. and params['lambd'] == 1.
                 and params['retention_fraction'] == fractions[1] and not interrupted):
             interrupted = True

@@ -226,8 +226,8 @@ def test_evaluator_cannot_supply_reserved_transition_metadata(tmp_path, runtimes
     args, fake = arguments(tmp_path, allow_blas_change=True), Scores()
     evaluate = fake.evaluate
 
-    def forged(params):
-        row = evaluate(params)
+    def forged(params, **kwargs):
+        row = evaluate(params, **kwargs)
         if params['gamma'] != 'scale':
             row['runtime_transition'] = {'reason': 'forged'}
         return row

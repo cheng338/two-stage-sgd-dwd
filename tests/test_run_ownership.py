@@ -124,7 +124,7 @@ def test_second_coordinator_same_output_rejected_without_evaluation_or_writes(tm
     evaluate = fake.evaluate
     checked = False
 
-    def attempt_reentry(params):
+    def attempt_reentry(params, **kwargs):
         nonlocal checked
         if not checked:
             checked = True
@@ -136,7 +136,7 @@ def test_second_coordinator_same_output_rejected_without_evaluation_or_writes(tm
                 _RUNNER.run_search(nested)
             assert fake.calls == calls and len(fake.constructed) == constructors
             assert _output_bytes(args.output_dir) == before
-        return evaluate(params)
+        return evaluate(params, **kwargs)
 
     with synthetic(fake), patch.object(fake, 'evaluate', side_effect=attempt_reentry):
         result = _RUNNER.run_search(args)
@@ -150,11 +150,11 @@ def test_independent_output_directories_can_run_while_first_is_owned(tmp_path):
     evaluate = fake.evaluate
     nested_results = []
 
-    def independent_run(params):
+    def independent_run(params, **kwargs):
         if not nested_results:
             with synthetic(other):
                 nested_results.append(_RUNNER.run_search(other_args))
-        return evaluate(params)
+        return evaluate(params, **kwargs)
 
     with synthetic(fake), patch.object(fake, 'evaluate', side_effect=independent_run):
         result = _RUNNER.run_search(args)
@@ -236,8 +236,8 @@ def test_invalid_new_evaluator_record_rejected_before_candidate_commit(tmp_path,
     args, fake = arguments(tmp_path), Scores()
     evaluate = fake.evaluate
 
-    def malformed_candidate(params):
-        result = evaluate(params)
+    def malformed_candidate(params, **kwargs):
+        result = evaluate(params, **kwargs)
         return result if params['gamma'] == 'scale' else corrupt(result, kind)
 
     with synthetic(fake), patch.object(fake, 'evaluate', side_effect=malformed_candidate):
@@ -266,10 +266,13 @@ def test_mixed_trained_and_ineligible_folds_remain_legitimate_evidence(tmp_path)
     args, fake = arguments(tmp_path), Scores(mode='invalid')
     evaluate = fake.evaluate
 
-    def mixed(params):
-        result = evaluate(params)
+    def mixed(params, *, completed_folds=None, on_fold_completed=None):
+        result = evaluate(params, completed_folds=completed_folds)
         if params['gamma'] != 'scale':
             result['folds'][0].update(eligible=True, accuracy=.5, status='trained')
+        if on_fold_completed is not None:
+            for fold in result['folds'][len(completed_folds or []):]:
+                on_fold_completed(copy.deepcopy(fold))
         return result
 
     with synthetic(fake), patch.object(fake, 'evaluate', side_effect=mixed):

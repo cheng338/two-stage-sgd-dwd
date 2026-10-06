@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Save an atomic completed-fold prefix for the adaptive MNIST runner's active
+  candidate and inherited-default control. Verify run, candidate, stage, runtime
+  and preceding-record identities before reuse; retain original fold evidence
+  and timings. Archive incomplete evidence and restart that candidate after an
+  explicitly permitted numerical-runtime change. Preserve completed-candidate
+  receipts, search policy and SGD updates; require a fresh output directory for
+  older search schemas.
 - Check pending Python signals every 1,024 completed native scalar updates on
   the main thread. Propagate exceptions from the check out of the native loop
   instead of returning a failed-update prefix. Preserve public exception

@@ -292,21 +292,69 @@ class FoldEvaluator:
         return {"kernel": "rbf", "lambd": _positive(params["lambd"], "lambd"),
                 "gamma": gamma, "retention_fraction": fraction}
 
-    def evaluate(self, params):
-        """Evaluate one candidate, preserving all fold selection failures."""
+    def evaluate(self, params, *, completed_folds=None, on_fold_completed=None):
+        """Evaluate one candidate, optionally reusing a verified fold prefix.
+
+        The runner binds a saved prefix to the candidate, run and execution
+        identity before passing it here. No fitted model is restored. The
+        callback receives an independent copy after each new fold, including a
+        selection failure, and after checking that the runtime is unchanged.
+        Replayed fold records retain their original component timings.
+        """
         try:
-            return self._evaluate(params)
+            return self._evaluate(params, completed_folds=completed_folds,
+                                  on_fold_completed=on_fold_completed)
         except BaseException:
             # An interrupted or failed candidate may have cached a screening
             # fit before the final runtime check. Discard uncertain entries.
             self._linear_cache.clear()
             raise
 
-    def _evaluate(self, params):
+    def _completed_prefix(self, params, records):
+        if not isinstance(records, list) or len(records) > len(self._folds):
+            raise ValueError("Invalid completed fold prefix")
+        records = deepcopy(records)
+        for index, record in enumerate(records):
+            train, validation = self._folds[index]
+            seed = int(np.random.SeedSequence([self.random_state, index]).generate_state(1)[0])
+            seeds = dict(zip(("linear_sgd", "selection_ties", "kernel_sgd"),
+                (int(value) for value in _generator(seed).integers(0, 2**32, size=3, dtype=np.uint64))))
+            gamma = resolve_kernel(self._X[train], "rbf", params["gamma"]).gamma
+            if (not isinstance(record, dict) or type(record.get("fold")) is not int
+                    or record["fold"] != index or record.get("seed") != seed
+                    or record.get("stage_seeds") != seeds
+                    or record.get("n_train") != len(train)
+                    or record.get("n_validation") != len(validation)
+                    or record.get("gamma_resolved") != gamma
+                    or type(record.get("eligible")) is not bool):
+                raise ValueError("Completed fold prefix differs from the evaluation controls")
+            if record["eligible"]:
+                accuracy = record.get("accuracy")
+                if (record.get("status") != "trained" or isinstance(accuracy, bool)
+                        or not isinstance(accuracy, numbers.Real) or not np.isfinite(accuracy)
+                        or not 0 <= accuracy <= 1):
+                    raise ValueError("Invalid completed eligible fold")
+            elif record.get("status") != "single_class_selection" or record.get("accuracy") is not None:
+                raise ValueError("Invalid completed selection failure")
+        return records
+
+    def _evaluate(self, params, *, completed_folds=None, on_fold_completed=None):
         params = self._parameters(params)
         controls = self._controls()
-        records = []
+        if on_fold_completed is not None and not callable(on_fold_completed):
+            raise ValueError("on_fold_completed must be callable")
+        records = self._completed_prefix(params, [] if completed_folds is None else completed_folds)
+        replayed = len(records)
+
+        def complete(record):
+            if on_fold_completed is not None:
+                self._check_execution_identity()
+                on_fold_completed(deepcopy(record))
+            records.append(record)
+
         for fold_index, (train, validation) in enumerate(self._folds):
+            if fold_index < replayed:
+                continue
             # Resolve data-dependent width on the full training fold, as does
             # TwoStageDWDClassifier, never on the retained subset or validation.
             gamma = resolve_kernel(self._X[train], "rbf", params["gamma"]).gamma
@@ -335,10 +383,11 @@ class FoldEvaluator:
                     raise SelectionError("The globally selected subset contains only one class")
             except SelectionError as exc:
                 record.update(status=exc.status, error=str(exc))
-                records.append(record)
-                continue
             finally:
                 record["selection_seconds"] = float(perf_counter() - began_selection)
+            if "error" in record:
+                complete(record)
+                continue
             model = KernelSGDDWD(**controls, lambd=params["lambd"], kernel="rbf", gamma=gamma,
                                  random_state=stage_seeds["kernel_sgd"],
                                  kernel_cache_bytes=self.kernel_cache_bytes)
@@ -360,10 +409,10 @@ class FoldEvaluator:
                           n_correct=correct, eligible=True, status="trained",
                           kernel_stop_reason=model.stop_reason_,
                           score_seconds=float(perf_counter() - began_score))
-            records.append(record)
+            complete(record)
         eligible = all(record["eligible"] for record in records)
-        # Check once at candidate boundaries, never in an optimizer update. A
-        # changed runtime cannot produce a completed/cache-compatible record.
+        # Keep the final candidate check even when individual folds were
+        # published. No runtime check occurs inside an optimizer update.
         self._check_execution_identity()
         return {"params": params, "eligible": eligible,
                 "mean_score": float(np.mean([record["accuracy"] for record in records])) if eligible else None,

@@ -14,11 +14,14 @@ from test_tune_mnist import _RUNNER, Scores, arguments, read, records, synthetic
 
 class DetailedScores(Scores):
     """Synthetic receipts include the same kinds of auxiliary fit evidence."""
-    def evaluate(self, params):
-        result = super().evaluate(params)
+    def evaluate(self, params, *, completed_folds=None, on_fold_completed=None):
+        result = super().evaluate(params, completed_folds=completed_folds)
         for fold in result['folds']:
             fold.update(selected_ids_sha256='a' * 64, linear_seconds_charged=.125,
                         kernel_seconds=.5, kernel_updates=12)
+        if on_fold_completed is not None:
+            for fold in result['folds'][len(completed_folds or []):]:
+                on_fold_completed(copy.deepcopy(fold))
         return result
 
 
@@ -311,8 +314,8 @@ def test_previous_schema_requires_fresh_output_without_modifying_evidence(tmp_pa
     with started(tmp_path, completed=route == 'qualified') as (args, fake):
         path = args.output_dir / 'config.json'
         config = read(path)
-        assert config['schema_version'] == 7
-        config['schema_version'] = 6
+        assert config['schema_version'] == 8
+        config['schema_version'] = 7
         path.write_text(json.dumps(config), encoding='utf-8')
         if route == 'qualified':
             refresh_outer_hashes(args.output_dir)

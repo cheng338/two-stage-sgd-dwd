@@ -243,7 +243,8 @@ setting; loading a qualified selection temporarily applies its recorded thread
 setting and then restores the caller's setting. The identity uses portable
 filenames, so moving unchanged environments alone does not invalidate it.
 The evaluator checks runtime identity at candidate boundaries before reusing
-screening fits. File hashes are cached while file stat stamps agree; no hashing
+screening fits and before publishing each completed fold. File hashes are
+cached while file stat stamps agree; no hashing
 occurs inside SGD updates. Keep the environment unchanged during a search:
 loading additional scientific extensions can also change its identity. This
 works best in a dedicated CV process with needed optional modules imported
@@ -277,6 +278,32 @@ without rewriting the export or inventing a fitting transition. Compare timing
 measurements only within one runtime; combining runtimes does not establish
 comparable fit or prediction performance. This mode applies only to searches
 started with the current checkpoint schema; older records are not rewritten.
+
+After each completed fold, the runner atomically saves `fold-progress.json` for
+its one active candidate, including a legitimate one-class selection failure.
+Its content receipt binds the ordered fold prefix to the candidate, stage,
+execution identity, saved run and preceding committed candidate receipt.
+Same-runtime resume reuses that verified prefix and evaluates only the remaining
+folds; an interrupted fold is rerun. The inherited-default control uses the same
+mechanism in a separate stage. No fitted models or optimizer state are restored.
+A crash after a completed candidate or control is saved is reconciled against
+the full fold receipt before that progress file is removed.
+
+An opt-in numerical-runtime change never combines old and new folds within one
+candidate. The incomplete candidate's verified progress is retained in a
+`fold-progress-abandoned-*.json` archive with the replacement runtime, then that
+candidate starts again from its first fold. Replayed fold indices appear in
+`replayed_fold_indices` on completed records. Their component times remain the
+original recorded measurements; `elapsed_seconds_not_a_benchmark` measures the
+completing candidate evaluation, including its progress writes. It excludes
+earlier attempts, startup reconciliation and the final candidate append, so it
+is not a fresh complete candidate timing. Atomic progress writes are required:
+a write failure stops evaluation rather than allowing an unrecorded fold prefix
+to advance.
+An empty progress marker contains no completed fitting evidence. If an attempt
+fails before completing its first fold, returning to a runtime already allowed
+by the saved configuration and completed records does not require another
+opt-in; the empty marker is archived before restarting that candidate.
 
 One coordinator at a time may use an output directory, including completed
 resume and qualified-selection export. A nonblocking operating-system lock

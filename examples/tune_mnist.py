@@ -7,6 +7,7 @@ budget; use larger budgets and independent seeds to assess their stability.
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 from dataclasses import asdict
 import hashlib
 import json
@@ -32,9 +33,13 @@ from _adaptive_grid import (AdaptiveSearchConfig, candidate_key, next_search_sta
 from _mnist_cv import FoldEvaluator, execution_identity
 
 
-_CONFIG_SCHEMA_VERSION = 7
+_CONFIG_SCHEMA_VERSION = 8
 _PLAN_SCHEMA_VERSION = 3
 _RECEIPT_SCHEMA_VERSION = 1
+_FOLD_SCHEMA_VERSION = 1
+_fold_parameters = FoldEvaluator._parameters
+_CONTROL_STAGE = 'inherited-default-control'
+_CONTROL_PARAMS = {'kernel': 'rbf', 'lambd': 1e-6, 'gamma': 'scale', 'retention_fraction': .3}
 
 
 def _io_path(path):
@@ -368,6 +373,150 @@ def write_json(path, value):
         raise
 
 
+def _validate_fold_prefix(folds, expected_folds):
+    if not isinstance(folds, list) or len(folds) > expected_folds:
+        raise ValueError('Invalid saved fold prefix length')
+    for index, fold in enumerate(folds):
+        if (not isinstance(fold, dict) or type(fold.get('fold')) is not int
+                or fold['fold'] != index or type(fold.get('eligible')) is not bool):
+            raise ValueError('Invalid saved fold order or eligibility')
+        score = fold.get('accuracy')
+        if fold['eligible']:
+            if (fold.get('status') != 'trained' or isinstance(score, bool)
+                    or not isinstance(score, numbers.Real) or not math.isfinite(score)
+                    or not 0 <= score <= 1):
+                raise ValueError('Invalid saved eligible fold')
+        elif fold.get('status') != 'single_class_selection' or score is not None:
+            raise ValueError('Invalid saved failed fold')
+    _content_sha256(folds)  # Reject nonfinite or non-JSON auxiliary evidence too.
+
+
+class _FoldCheckpoint:
+    """One active candidate's durable completed folds, under the run lease."""
+    def __init__(self, directory, *, run_sha256, expected_folds, execution_identity,
+                 allow_blas_change, threads, records, stages, control=None):
+        self.path = _io_path(directory) / 'fold-progress.json'
+        self.run_sha256, self.expected_folds = run_sha256, expected_folds
+        self.identity = deepcopy(execution_identity)
+        self.allow_blas_change, self.threads = allow_blas_change, threads
+        self.sequence = len(records)
+        self.previous_sha256 = records[-1]['_receipt']['sha256'] if records else run_sha256
+        self.active = None
+        if not self.path.exists():
+            return
+        saved = _read_json(self.path)
+        required = {'schema_version', 'run_sha256', 'stage', 'params', 'candidate_key',
+                    'execution_identity', 'expected_folds', 'candidate_sequence',
+                    'previous_sha256', 'folds', 'sha256'}
+        if (not isinstance(saved, dict) or set(saved) != required
+                or type(saved['schema_version']) is not int
+                or saved['schema_version'] != _FOLD_SCHEMA_VERSION
+                or saved['run_sha256'] != run_sha256
+                or type(saved['expected_folds']) is not int
+                or saved['expected_folds'] != expected_folds
+                or type(saved['candidate_sequence']) is not int
+                or not 0 <= saved['candidate_sequence'] <= len(records)
+                or not isinstance(saved['execution_identity'], dict)
+                or saved['params'] != _fold_parameters(saved['params'])
+                or saved['candidate_key'] != _content_sha256(saved['params'])
+                or saved['sha256'] != _content_sha256({key: value for key, value in saved.items()
+                                                       if key != 'sha256'})):
+            raise ValueError('Invalid fold-progress receipt or run identity')
+        _validate_fold_prefix(saved['folds'], expected_folds)
+        sequence = saved['candidate_sequence']
+        previous = records[sequence - 1]['_receipt']['sha256'] if sequence else run_sha256
+        if saved['previous_sha256'] != previous:
+            raise ValueError('Fold progress differs from the committed candidate history')
+        if saved['stage'] == _CONTROL_STAGE:
+            if saved['params'] != _CONTROL_PARAMS or sequence != 0:
+                raise ValueError('Invalid inherited-control fold progress')
+            committed = control
+        else:
+            stage = next((item for item in stages if item['name'] == saved['stage']), None)
+            if stage is None or saved['params'] not in [_fold_parameters(p) for p in stage['candidates']]:
+                raise ValueError('Fold progress does not belong to a saved candidate stage')
+            committed = records[sequence] if sequence < len(records) else None
+            if committed is not None and (len(records) != sequence + 1
+                    or committed.get('stage') != saved['stage']):
+                raise ValueError('Stale fold progress disagrees with completed candidate history')
+            if committed is None:
+                attempted = {candidate_key(record['params']) for record in records}
+                pending = [_fold_parameters(p) for p in stage['candidates']
+                           if candidate_key(p) not in attempted]
+                if stage.get('completed') is not False or not pending or saved['params'] != pending[0]:
+                    raise ValueError('Fold progress is not the next pending stage candidate')
+        self.active = saved
+        if committed is not None:
+            self.complete(committed)
+        elif sequence != len(records):
+            raise ValueError('Fold progress is not the next uncommitted candidate')
+        elif saved['folds']:
+            _authorize_runtime(saved['execution_identity'], self.identity,
+                               allow_blas_change=self.allow_blas_change, threads=self.threads)
+
+    def _publish(self, payload):
+        saved = deepcopy(payload)
+        saved.pop('sha256', None)
+        saved['sha256'] = _content_sha256(saved)
+        write_json(self.path, saved)
+        self.active = saved
+
+    def begin(self, stage, params):
+        params = _fold_parameters(params)
+        if self.active is not None:
+            if self.active['stage'] != stage or self.active['params'] != params:
+                raise ValueError('Pending fold progress belongs to a different candidate')
+            if self.active['execution_identity'] != self.identity:
+                if self.active['folds']:
+                    _authorize_runtime(self.active['execution_identity'], self.identity,
+                                       allow_blas_change=self.allow_blas_change, threads=self.threads)
+                # An empty marker contains no fitted evidence. The run-level
+                # configuration and committed records already authorize the
+                # current runtime; a failed attempt need not add a transition.
+                reason = ('numerical_runtime_changed' if self.active['folds'] else
+                          'no_completed_folds_after_runtime_change')
+                evidence = {'reason': reason, 'checkpoint': self.active,
+                            'replacement_execution_identity': self.identity}
+                archive = self.path.with_name('fold-progress-abandoned-' + _content_sha256(evidence) + '.json')
+                if archive.exists():
+                    if _read_json(archive) != evidence:
+                        raise ValueError('Abandoned fold-progress archive differs')
+                else:
+                    write_json(archive, evidence)
+                self.path.unlink()
+                self.active = None
+        if self.active is None:
+            self._publish({'schema_version': _FOLD_SCHEMA_VERSION, 'run_sha256': self.run_sha256,
+                'stage': stage, 'params': params, 'candidate_key': _content_sha256(params),
+                'execution_identity': self.identity, 'expected_folds': self.expected_folds,
+                'candidate_sequence': self.sequence, 'previous_sha256': self.previous_sha256,
+                'folds': []})
+        return deepcopy(self.active['folds'])
+
+    def save(self, fold):
+        if self.active is None:
+            raise ValueError('No active candidate for completed fold')
+        saved = deepcopy(self.active)
+        saved['folds'].append(deepcopy(fold))
+        _validate_fold_prefix(saved['folds'], self.expected_folds)
+        self._publish(saved)
+
+    def verify(self, record):
+        if (self.active is None or len(self.active['folds']) != self.expected_folds
+                or self.active['params'] != _fold_parameters(record['params'])
+                or self.active['execution_identity'] != record.get('execution_identity')
+                or self.active['folds'] != record.get('folds')):
+            raise ValueError('Completed candidate differs from its fold-progress receipt')
+
+    def complete(self, record):
+        self.verify(record)
+        self.path.unlink()
+        self.active = None
+        if '_receipt' in record:
+            self.sequence = record['_receipt']['sequence'] + 1
+            self.previous_sha256 = record['_receipt']['sha256']
+
+
 def _write_failure_json(path, value):
     """Report a failed evaluation without replacing its original exception."""
     try:
@@ -395,7 +544,8 @@ def balanced_indices(y, count, seed):
 
 
 def read_records(path, *, expected_folds, execution_identity, run_sha256, recover=True,
-                 allow_blas_change=False, current_execution_identity=None, threads=None):
+                 allow_blas_change=False, current_execution_identity=None, threads=None,
+                 repair=True):
     path = _io_path(path)
     original = path.read_bytes()
     raw = original.decode('utf-8')
@@ -422,11 +572,12 @@ def read_records(path, *, expected_folds, execution_identity, run_sha256, recove
         backup = path.with_name('records-interrupted.jsonl')
         if backup.exists():
             raise ValueError('An interrupted-record backup already exists; review it before resuming')
-        backup.write_bytes(original)
-        temporary = path.with_suffix('.jsonl.tmp')
-        temporary.write_bytes(''.join(lines[:-1]).encode('utf-8'))
-        temporary.replace(path)
-    if recover and lines and len(records) == len(lines) and not lines[-1].endswith('\n'):
+        if repair:
+            backup.write_bytes(original)
+            temporary = path.with_suffix('.jsonl.tmp')
+            temporary.write_bytes(''.join(lines[:-1]).encode('utf-8'))
+            temporary.replace(path)
+    if repair and recover and lines and len(records) == len(lines) and not lines[-1].endswith('\n'):
         # The JSON object can be complete even if its trailing newline was
         # interrupted. Separate it from the next append without dropping it.
         temporary = path.with_suffix('.jsonl.tmp')
@@ -649,17 +800,9 @@ def _run_search(args, *, param_grid):
             records = read_records(out / 'records.jsonl', expected_folds=args.folds,
                                    execution_identity=config['execution_identity'], run_sha256=run_sha256,
                                    allow_blas_change=allow_blas_change,
-                                   current_execution_identity=native_identity, threads=args.threads)
+                                   current_execution_identity=native_identity, threads=args.threads,
+                                   repair=False)
             stages = _read_json(out / 'stages.json')
-            if plan['completed']:
-                result = _read_json(out / 'selection.json')
-                if result['records_sha256'] != _file_hash(out / 'records.jsonl'):
-                    raise ValueError('Completed search records differ from the saved selection')
-                if result['state'] == 'accepted':
-                    _load_qualified_selection_locked(out, allow_blas_change=allow_blas_change)
-                elif result['state'] != 'needs_review':
-                    raise ValueError('Invalid completed search state')
-                return _consumer_context(result, native_identity) if allow_blas_change else result
         else:
             records, stages = [], []
             snapshot = out / 'implementation-snapshot'
@@ -674,6 +817,29 @@ def _run_search(args, *, param_grid):
             plan = {'schema_version': _PLAN_SCHEMA_VERSION, 'policy_state': {},
                     'phase': 'coarse', 'completed': False}
             write_json(out / 'plan_state.json', plan)
+        control_path = out / 'inherited-default-control.json'
+        progress = _FoldCheckpoint(out, run_sha256=run_sha256, expected_folds=args.folds,
+            execution_identity=native_identity, allow_blas_change=allow_blas_change,
+            threads=args.threads, records=records, stages=stages,
+            control=_read_json(control_path) if control_path.exists() else None)
+        if args.resume:
+            # Validate both durable stores before repairing a permitted torn
+            # candidate append. A corrupt partial fold must leave it untouched.
+            read_records(out / 'records.jsonl', expected_folds=args.folds,
+                         execution_identity=config['execution_identity'], run_sha256=run_sha256,
+                         allow_blas_change=allow_blas_change,
+                         current_execution_identity=native_identity, threads=args.threads)
+        if plan['completed']:
+            if progress.active is not None:
+                raise ValueError('Completed search has uncommitted fold progress')
+            result = _read_json(out / 'selection.json')
+            if result['records_sha256'] != _file_hash(out / 'records.jsonl'):
+                raise ValueError('Completed search records differ from the saved selection')
+            if result['state'] == 'accepted':
+                _load_qualified_selection_locked(out, allow_blas_change=allow_blas_change)
+            elif result['state'] != 'needs_review':
+                raise ValueError('Invalid completed search state')
+            return _consumer_context(result, native_identity) if allow_blas_change else result
         attempted = {candidate_key(record['params']) for record in records}
         # A crash can occur after the last candidate append but before the stage
         # mirror is updated. The policy's saved pending stage still grants credit
@@ -693,7 +859,14 @@ def _run_search(args, *, param_grid):
 
         def evaluate_candidate(stage, params):
             try:
-                record = evaluator.evaluate(params)
+                completed_folds = progress.begin(stage, params)
+
+                def save_fold(fold):
+                    _verify_execution_identity(config, native_identity)
+                    progress.save(fold)
+
+                record = evaluator.evaluate(params, completed_folds=completed_folds,
+                                            on_fold_completed=save_fold)
                 if not isinstance(record, dict):
                     raise ValueError('Invalid candidate record: evaluator must return a dictionary')
                 if 'runtime_transition' in record:
@@ -703,6 +876,8 @@ def _run_search(args, *, param_grid):
                 if stage != 'inherited-default-control':
                     _validate_records([record], expected_folds=args.folds,
                                       execution_identity=native_identity)
+                progress.verify(record)
+                record['replayed_fold_indices'] = list(range(len(completed_folds)))
                 return record
             except (Exception, KeyboardInterrupt, SystemExit) as exc:
                 failure = {'stage': stage, 'params': dict(params),
@@ -749,6 +924,7 @@ def _run_search(args, *, param_grid):
                     os.fsync(stream.fileno())
                 records.append(record)
                 attempted.add(key)
+                progress.complete(record)
                 ranked = rank()
                 status = {'state': 'running', 'stage': name, 'completed_candidates': len(records),
                           'best_mean_accuracy': ranked[0]['mean_score'] if ranked else None,
@@ -762,11 +938,10 @@ def _run_search(args, *, param_grid):
             existing['score_after'] = ranked[0]['mean_score'] if ranked else None
             write_json(out / 'stages.json', stages)
 
-        control_path = out / 'inherited-default-control.json'
         if not control_path.exists():
-            control = evaluate_candidate('inherited-default-control',
-                {'kernel': 'rbf', 'lambd': 1e-6, 'gamma': 'scale', 'retention_fraction': .3})
+            control = evaluate_candidate(_CONTROL_STAGE, _CONTROL_PARAMS)
             write_json(control_path, control)
+            progress.complete(control)
         while True:
             proposal = next_search_stage(records, grid, policy, plan['policy_state'])
             plan.update(policy_state=proposal['state'], phase=proposal['phase'])
