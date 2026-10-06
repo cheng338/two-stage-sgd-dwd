@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Avoid an extra kernel-block copy for locally allocated cosine and constant
+  outputs after shape and finite checks. Preserve independent copies for
+  callable, imported-kernel and subclass-hook outputs. Reduce temporary
+  allocation without changing kernel arithmetic, SGD updates or defaults.
 - Add a small external scikit-learn one-vs-one example with copied per-pair
   diagnostics. Document pair-local labels and observation IDs, selection
   failures and validation-data limitations; preserve binary estimators,

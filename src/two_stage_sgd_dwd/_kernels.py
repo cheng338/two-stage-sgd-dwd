@@ -95,6 +95,7 @@ class KernelSpec:
         shape = (len(left), len(right))
         if 0 in shape:
             return np.empty(shape, dtype=np.float64)
+        owned_output = False
         with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
             if callable(self.kernel):
                 # A user function receives private arrays and keywords: mutations
@@ -112,10 +113,15 @@ class KernelSpec:
             elif self.kernel == "rbf":
                 values = (np.ones(shape) if self.gamma == 0.0
                           else rbf_kernel(left, right, self.gamma))
+                owned_output = self.gamma == 0.0
             elif self.kernel == "cosine":
-                values = _unit_rows(left) @ _unit_rows(right).T
+                left_unit, right_unit = _unit_rows(left), _unit_rows(right)
+                values = left_unit @ right_unit.T
+                owned_output = type(left_unit) is np.ndarray and type(right_unit) is np.ndarray
+                del left_unit, right_unit
             elif self.kernel in ("poly", "polynomial") and self.kws["degree"] == 0:
                 values = np.ones(shape)
+                owned_output = True
             elif self.gamma == 0.0:
                 if self.kernel in ("laplacian", "chi2"):
                     constant = 1.0
@@ -126,11 +132,16 @@ class KernelSpec:
                 else:  # Resolution never assigns gamma to other named kernels.
                     raise ValueError("Unexpected gamma for this kernel")
                 values = np.full(shape, constant, dtype=np.float64)
+                owned_output = True
             else:
                 values = pairwise_kernels(left, right, metric=self.kernel, **self.kws)
         if values.shape != shape:
             raise ValueError(f"Kernel output must have shape {shape}, got {values.shape}")
         _finite_result(values, "kernel block")
+        # Only locally allocated outputs have no aliases retained by a producer.
+        if (owned_output and type(values) is np.ndarray and values.dtype == np.float64
+                and values.flags.owndata and values.flags.writeable):
+            return values
         return np.array(values, dtype=np.float64, copy=True)
 
     def prepare(self, X: ArrayLike, block_size: int = 256, check_deadline=None) -> dict:
