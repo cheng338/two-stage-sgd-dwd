@@ -311,8 +311,8 @@ def test_previous_schema_requires_fresh_output_without_modifying_evidence(tmp_pa
     with started(tmp_path, completed=route == 'qualified') as (args, fake):
         path = args.output_dir / 'config.json'
         config = read(path)
-        assert config['schema_version'] == 6
-        config['schema_version'] = 5
+        assert config['schema_version'] == 7
+        config['schema_version'] = 6
         path.write_text(json.dumps(config), encoding='utf-8')
         if route == 'qualified':
             refresh_outer_hashes(args.output_dir)

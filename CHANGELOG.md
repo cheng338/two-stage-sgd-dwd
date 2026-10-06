@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add explicit `--allow-blas-change` support for compatible numerical-build
+  changes between adaptive MNIST processes. Preserve completed receipts and the
+  original configuration, record transitions with the next completed candidate,
+  and disclose the selected candidate's runtime and full runtime history.
+  Keep strict defaults and evaluator-lifetime checks; mixed-runtime resumes and
+  qualified loads require opt-in on every invocation. Keep versions, package
+  implementation, data and numerical controls fixed, and require a fresh run
+  for checkpoints created before this migration-aware schema.
 - Add inline candidate receipts to adaptive MNIST records, binding their full
   content and sequence to the saved configuration and folds. Verify complete
   records before resumed fitting or interrupted-tail repair, reject duplicate

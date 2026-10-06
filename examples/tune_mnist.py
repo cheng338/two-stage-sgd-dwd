@@ -18,7 +18,9 @@ import platform
 import time
 
 import numpy as np
+import joblib
 from sklearn.model_selection import ParameterGrid, StratifiedKFold
+import threadpoolctl
 from threadpoolctl import threadpool_limits
 
 import two_stage_sgd_dwd
@@ -29,7 +31,7 @@ from _adaptive_grid import (AdaptiveSearchConfig, candidate_key, next_search_sta
 from _mnist_cv import FoldEvaluator, execution_identity
 
 
-_CONFIG_SCHEMA_VERSION = 6
+_CONFIG_SCHEMA_VERSION = 7
 _PLAN_SCHEMA_VERSION = 3
 _RECEIPT_SCHEMA_VERSION = 1
 
@@ -78,7 +80,8 @@ class _RunLease:
             self.stream = None
 
 
-def _validate_records(records, *, expected_folds, execution_identity):
+def _validate_records(records, *, expected_folds, execution_identity,
+                      allow_blas_change=False, threads=None):
     """Validate completed candidate evidence, including legitimate failures."""
     attempted = set()
     for number, record in enumerate(records):
@@ -94,8 +97,9 @@ def _validate_records(records, *, expected_folds, execution_identity):
         if key in attempted:
             raise ValueError('Saved search contains duplicate candidates')
         attempted.add(key)
-        if record['execution_identity'] != execution_identity:
-            raise ValueError(prefix + 'execution identity differs from the saved run')
+        if record['execution_identity'] != execution_identity and not allow_blas_change:
+            raise ValueError(prefix + 'execution identity differs from the saved run; '
+                             'mixed runs require --allow-blas-change')
         if not isinstance(record['eligible'], bool):
             raise ValueError(prefix + 'eligible must be boolean')
         folds = record['folds']
@@ -135,6 +139,7 @@ def _validate_records(records, *, expected_folds, execution_identity):
                 raise ValueError(prefix + 'mean score disagrees with eligible folds')
         elif mean is not None:
             raise ValueError(prefix + 'failed candidates must have a null mean score')
+    _runtime_history(records, execution_identity, threads=threads)
     return attempted
 
 
@@ -167,6 +172,129 @@ def _read_json(path):
 
 def _run_sha256(config, splits):
     return _content_sha256({'config': config, 'splits': splits})
+
+
+def _check_blas_change(previous, current, *, threads):
+    """Allow a documented numerical-build switch, not an arbitrary runtime edit."""
+    message = 'Incompatible BLAS change: Python, dependencies, optimizer or numerical controls differ'
+    if (not isinstance(previous, dict) or not isinstance(current, dict)
+            or {key: value for key, value in previous.items() if key != 'numerical_runtime'} !=
+            {key: value for key, value in current.items() if key != 'numerical_runtime'}):
+        raise ValueError(message)
+    old, new = previous.get('numerical_runtime'), current.get('numerical_runtime')
+    fields = {'schema_version', 'python', 'implementation', 'system', 'machine',
+              'packages', 'binaries', 'threadpools'}
+    if (not isinstance(old, dict) or not isinstance(new, dict)
+            or set(old) != fields or set(new) != fields
+            or type(old['schema_version']) is not int or old['schema_version'] != 1
+            or type(new['schema_version']) is not int or new['schema_version'] != 1
+            or any(old[name] != new[name] for name in fields - {'packages', 'binaries', 'threadpools'})):
+        raise ValueError(message)
+
+    def digest(value):
+        return isinstance(value, str) and len(value) == 64 and set(value) <= set('0123456789abcdef')
+
+    def packages(runtime):
+        entries = runtime['packages']
+        if not isinstance(entries, dict) or set(entries) != {'numpy', 'scipy', 'sklearn'}:
+            raise ValueError(message)
+        result = {}
+        for name, package in entries.items():
+            if (not isinstance(package, dict) or set(package) != {'version', 'filename', 'sha256'}
+                    or not digest(package['sha256'])):
+                raise ValueError(message)
+            result[name] = {key: value for key, value in package.items() if key != 'sha256'}
+        return result
+
+    def binaries(runtime):
+        result = []
+        modules = set()
+        if not isinstance(runtime['binaries'], list) or not runtime['binaries']:
+            raise ValueError(message)
+        for binary in runtime['binaries']:
+            if (not isinstance(binary, dict) or set(binary) != {'module', 'filename', 'sha256'}
+                    or not isinstance(binary['module'], str) or binary['module'] in modules
+                    or not digest(binary['sha256'])
+                    or binary['module'].split('.', 1)[0] not in ('numpy', 'scipy', 'sklearn')):
+                raise ValueError(message)
+            modules.add(binary['module'])
+            # Same-version vendor builds can differ throughout the numerical
+            # stack. Keep its complete module/ABI inventory, not binary equality.
+            result.append({key: value for key, value in binary.items() if key != 'sha256'})
+        return result
+
+    if packages(old) != packages(new) or binaries(old) != binaries(new):
+        raise ValueError(message)
+    for runtime in (old, new):
+        pools = runtime['threadpools']
+        if (not isinstance(pools, list) or not pools or any(not isinstance(pool, dict) for pool in pools)
+                or not any(pool.get('user_api') == 'blas' for pool in pools)
+                or any(pool.get('user_api') not in ('blas', 'openmp')
+                       or (pool['user_api'] == 'blas' and pool.get('internal_api') not in ('blis', 'mkl', 'openblas'))
+                       or (pool['user_api'] == 'openmp' and pool.get('internal_api') != 'openmp')
+                       or not isinstance(pool.get('filename'), str) or not pool['filename']
+                       or not digest(pool.get('sha256'))
+                       or type(pool.get('num_threads')) is not int
+                       or pool['num_threads'] != threads for pool in pools)):
+            raise ValueError(message)
+    library_keys = lambda runtime: sorted((pool['user_api'], pool['internal_api'], pool['filename'],
+                                           pool['sha256']) for pool in runtime['threadpools'])
+    if library_keys(old) == library_keys(new):
+        raise ValueError('Incompatible BLAS change: loaded BLAS/OpenMP libraries are unchanged')
+
+
+def _authorize_runtime(previous, current, *, allow_blas_change, threads):
+    if previous == current:
+        return
+    if not allow_blas_change:
+        raise ValueError('Execution identity differs; a compatible switch requires --allow-blas-change')
+    _check_blas_change(previous, current, threads=threads)
+
+
+def _runtime_transition(previous, current):
+    return {'schema_version': 1, 'reason': 'explicit_blas_change',
+            'from_identity_sha256': _content_sha256(previous),
+            'to_identity_sha256': _content_sha256(current)}
+
+
+def _runtime_history(records, initial_identity, *, threads):
+    history = [{'candidate_sequence': None, 'execution_identity': initial_identity}]
+    previous = initial_identity
+    for sequence, record in enumerate(records):
+        current = record['execution_identity']
+        transition = record.get('runtime_transition')
+        if current == previous:
+            if 'runtime_transition' in record:
+                raise ValueError('Unexpected runtime transition without an execution identity change')
+        else:
+            if (not isinstance(transition, dict) or type(transition.get('schema_version')) is not int
+                    or transition != _runtime_transition(previous, current)):
+                raise ValueError('Missing or invalid runtime transition')
+            _check_blas_change(previous, current, threads=threads)
+            history.append({'candidate_sequence': sequence, 'execution_identity': current})
+        previous = current
+    return history
+
+
+def _runtime_summary(records, initial_identity, *, threads):
+    history = _runtime_history(records, initial_identity, threads=threads)
+    ranked = ordered_eligible(records)
+    return {'runtime_history': history, 'mixed_runtime': len(history) > 1,
+            'selected_execution_identity': ranked[0]['execution_identity'] if ranked else None,
+            'timings_require_same_runtime': True}
+
+
+def _consumer_context(evidence, identity):
+    return {**evidence, 'consumer_execution_identity': identity,
+            'consumer_runtime_differs_from_selected': identity != evidence['selected_execution_identity']}
+
+
+def _runtime_versions():
+    import scipy
+    import sklearn
+    return {'python': platform.python_version(), 'numpy': np.__version__,
+            'scipy': scipy.__version__, 'scikit_learn': sklearn.__version__,
+            'joblib': joblib.__version__, 'threadpoolctl': threadpoolctl.__version__}
 
 
 def _seal_record(record, *, run_sha256, sequence, previous_sha256):
@@ -227,7 +355,8 @@ def balanced_indices(y, count, seed):
     return np.sort(selected)
 
 
-def read_records(path, *, expected_folds, execution_identity, run_sha256, recover=True):
+def read_records(path, *, expected_folds, execution_identity, run_sha256, recover=True,
+                 allow_blas_change=False, current_execution_identity=None, threads=None):
     original = path.read_bytes()
     raw = original.decode('utf-8')
     lines = raw.splitlines(keepends=True)
@@ -242,8 +371,13 @@ def read_records(path, *, expected_folds, execution_identity, run_sha256, recove
             interrupted = True
     # Never repair a tail until all preceding records are safe to reuse.
     _validate_records(records, expected_folds=expected_folds,
-                      execution_identity=execution_identity)
+                      execution_identity=execution_identity,
+                      allow_blas_change=allow_blas_change, threads=threads)
     _verify_receipts(records, run_sha256=run_sha256)
+    if current_execution_identity is not None:
+        previous = records[-1]['execution_identity'] if records else execution_identity
+        _authorize_runtime(previous, current_execution_identity,
+                           allow_blas_change=allow_blas_change, threads=threads)
     if interrupted:
         backup = path.with_name('records-interrupted.jsonl')
         if backup.exists():
@@ -302,8 +436,8 @@ def _implementation_bytes(identity):
     return contents
 
 
-def _verify_execution_identity(config):
-    expected = config['execution_identity']
+def _verify_execution_identity(config, expected=None):
+    expected = config['execution_identity'] if expected is None else expected
     if execution_identity(config['optimizer_backend']) != expected:
         raise ValueError('Optimizer or numerical runtime identity differs from the saved run')
     if expected['extension_available']:
@@ -311,7 +445,7 @@ def _verify_execution_identity(config):
             raise ValueError('Native extension is missing from the implementation snapshot identity')
 
 
-def load_qualified_selection(directory):
+def load_qualified_selection(directory, *, allow_blas_change=False):
     """Load locked settings only after the adaptive search earns acceptance.
 
     This guard neither fits a model nor opens held-out data. Acceptance applies
@@ -321,12 +455,16 @@ def load_qualified_selection(directory):
     """
     directory = Path(directory)
     with _RunLease(directory / '.run.lock'):
-        return _load_qualified_selection_locked(directory)
+        return _load_qualified_selection_locked(directory, allow_blas_change=allow_blas_change)
 
 
-def _load_qualified_selection_locked(directory):
+def _load_qualified_selection_locked(directory, *, allow_blas_change=False):
+    if type(allow_blas_change) is not bool:
+        raise ValueError('allow_blas_change must be boolean')
     config = _read_json(directory / 'config.json')
     _verify_config_schema(config)
+    if config['runtime'] != _runtime_versions():
+        raise ValueError('Current Python or dependency versions differ from the saved run')
     status = _read_json(directory / 'status.json')
     if status.get('state') != 'accepted' or not status.get('final_evaluation_eligible'):
         raise ValueError('Search needs review; final evaluation is not qualified')
@@ -337,10 +475,13 @@ def _load_qualified_selection_locked(directory):
     for name, expected in locked['evidence_sha256'].items():
         if _file_hash(directory / name) != expected:
             raise ValueError(f'Qualified selection evidence differs: {name}')
+    with threadpool_limits(config['threads']):
+        current_identity = execution_identity(config['optimizer_backend'])
     records = read_records(directory / 'records.jsonl', expected_folds=config['folds'],
                            execution_identity=config['execution_identity'],
                            run_sha256=_run_sha256(config, _read_json(directory / 'splits.json')),
-                           recover=False)
+                           recover=False, allow_blas_change=allow_blas_change,
+                           current_execution_identity=current_identity, threads=config['threads'])
     if not ordered_eligible(records, expected_folds=config['folds']):
         raise ValueError('Qualified selection requires eligible candidate evidence')
     selection = _read_json(directory / 'selection.json')
@@ -355,10 +496,18 @@ def _load_qualified_selection_locked(directory):
                  'kernel_cache_bytes', 'execution_identity'):
         if locked.get(name) != config[name]:
             raise ValueError(f'Qualified selection controls differ: {name}')
+    summary = _runtime_summary(records, config['execution_identity'], threads=config['threads'])
+    for name, value in summary.items():
+        if locked.get(name) != value or selection.get(name) != value:
+            raise ValueError('Qualified runtime provenance differs: ' + name)
     with threadpool_limits(config['threads']):
-        _verify_execution_identity(config)
+        _verify_execution_identity(config, current_identity)
+    current_sources = {name: hashlib.sha256(content).hexdigest()
+                       for name, content in _implementation_bytes(current_identity).items()}
+    if current_sources != config['implementation_sha256']:
+        raise ValueError('Current implementation differs from the saved run')
     verify_implementation_snapshot(directory / 'implementation-snapshot', config['implementation_sha256'])
-    return locked
+    return _consumer_context(locked, current_identity) if allow_blas_change else locked
 
 
 def _policy_config(args):
@@ -386,6 +535,9 @@ def run_search(args, *, param_grid=None):
 
 
 def _run_search(args, *, param_grid):
+    allow_blas_change = getattr(args, 'allow_blas_change', False)
+    if type(allow_blas_change) is not bool:
+        raise ValueError('allow_blas_change must be boolean')
     policy = _policy_config(args)
     grid = mnist_param_grid(broad=args.broad_grid) if param_grid is None else param_grid
     coarse = list(ParameterGrid(grid))
@@ -405,8 +557,6 @@ def _run_search(args, *, param_grid):
                                 random_state=args.random_state).split(X, y))
     split_payload = {'observation_ids': ids.tolist(),
         'folds': [{'fit': fit.tolist(), 'score': score.tolist()} for fit, score in folds]}
-    import scipy
-    import sklearn
     config = {'schema_version': _CONFIG_SCHEMA_VERSION, 'digits': list(data.digits),
         'train_size': args.train_size, 'folds': args.folds,
         'epochs': args.epochs, 'random_state': args.random_state, 'batch_size': 1,
@@ -421,8 +571,7 @@ def _run_search(args, *, param_grid):
         'retention_scope': 'fixed choices in the supplied grid; no continuous retention optimum claimed',
         'coarse_candidates': len(coarse), 'grid': grid,
         'package_version': two_stage_sgd_dwd.__version__,
-        'runtime': {'python': platform.python_version(), 'numpy': np.__version__,
-                    'scipy': scipy.__version__, 'scikit_learn': sklearn.__version__},
+        'runtime': _runtime_versions(),
         'implementation_sha256': {name: hashlib.sha256(content).hexdigest()
                                   for name, content in implementation_bytes.items()}}
     run_sha256 = _run_sha256(config, split_payload)
@@ -433,8 +582,13 @@ def _run_search(args, *, param_grid):
         if args.resume:
             saved = _read_json(out / 'config.json')
             _verify_config_schema(saved)
-            if saved != config:
+            if ({key: value for key, value in saved.items() if key != 'execution_identity'} !=
+                    {key: value for key, value in config.items() if key != 'execution_identity'}):
                 raise ValueError('Resume configuration, implementation, runtime or input data differs from the saved run')
+            _authorize_runtime(saved['execution_identity'], native_identity,
+                               allow_blas_change=allow_blas_change, threads=args.threads)
+            config = saved
+            run_sha256 = _run_sha256(config, split_payload)
             if _read_json(out / 'splits.json') != split_payload:
                 raise ValueError('Resume observation IDs or folds differ from the saved split')
             verify_implementation_snapshot(out / 'implementation-snapshot', config['implementation_sha256'])
@@ -450,17 +604,19 @@ def _run_search(args, *, param_grid):
                 raise ValueError('Unsupported saved search policy schema; start a fresh output directory '
                                  'for exact parameter identities.')
             records = read_records(out / 'records.jsonl', expected_folds=args.folds,
-                                   execution_identity=native_identity, run_sha256=run_sha256)
+                                   execution_identity=config['execution_identity'], run_sha256=run_sha256,
+                                   allow_blas_change=allow_blas_change,
+                                   current_execution_identity=native_identity, threads=args.threads)
             stages = _read_json(out / 'stages.json')
             if plan['completed']:
                 result = _read_json(out / 'selection.json')
                 if result['records_sha256'] != _file_hash(out / 'records.jsonl'):
                     raise ValueError('Completed search records differ from the saved selection')
                 if result['state'] == 'accepted':
-                    _load_qualified_selection_locked(out)
+                    _load_qualified_selection_locked(out, allow_blas_change=allow_blas_change)
                 elif result['state'] != 'needs_review':
                     raise ValueError('Invalid completed search state')
-                return result
+                return _consumer_context(result, native_identity) if allow_blas_change else result
         else:
             records, stages = [], []
             snapshot = out / 'implementation-snapshot'
@@ -497,6 +653,8 @@ def _run_search(args, *, param_grid):
                 record = evaluator.evaluate(params)
                 if not isinstance(record, dict):
                     raise ValueError('Invalid candidate record: evaluator must return a dictionary')
+                if 'runtime_transition' in record:
+                    raise ValueError('Evaluator records must not supply runtime_transition')
                 if record.get('execution_identity') != native_identity:
                     raise ValueError('Evaluator execution identity differs from the saved run')
                 if stage != 'inherited-default-control':
@@ -534,6 +692,10 @@ def _run_search(args, *, param_grid):
                 if candidate_key(record['params']) != key:
                     raise ValueError('Evaluator returned a different parameter candidate')
                 record.update(stage=name, elapsed_seconds_not_a_benchmark=time.perf_counter()-start)
+                previous_runtime = (records[-1]['execution_identity'] if records else
+                                    config['execution_identity'])
+                if previous_runtime != native_identity:
+                    record['runtime_transition'] = _runtime_transition(previous_runtime, native_identity)
                 record = _seal_record(record, run_sha256=run_sha256,
                                       sequence=len(records),
                                       previous_sha256=(records[-1]['_receipt']['sha256']
@@ -573,11 +735,14 @@ def _run_search(args, *, param_grid):
 
         state = plan['policy_state']
         _validate_records(records, expected_folds=args.folds,
-                          execution_identity=native_identity)
+                          execution_identity=config['execution_identity'],
+                          allow_blas_change=allow_blas_change, threads=args.threads)
         _verify_receipts(records, run_sha256=run_sha256)
         ranked = rank()
         accepted = review['state'] == 'accepted'
+        runtime_summary = _runtime_summary(records, config['execution_identity'], threads=args.threads)
         selection = {
+            **runtime_summary,
             'state': review['state'], 'params': ranked[0]['params'] if ranked else None,
             'mean_cv_accuracy': ranked[0]['mean_score'] if ranked else None,
             'eligible_candidates': len(ranked), 'attempted_candidates': len(records),
@@ -599,12 +764,13 @@ def _run_search(args, *, param_grid):
                    'winner_bracket': selection['winner_bracket'],
                    'stable_refinement_rounds': selection['stable_refinement_rounds']})
         if accepted:
-            _verify_execution_identity(config)
+            _verify_execution_identity(config, native_identity)
             locked = {'params': selection['params'], 'epochs': args.epochs,
                       'sampling': 'with_replacement', 'batch_size': 1, 'stopping': 'fixed',
                       'random_state': args.random_state, 'preprocessing': config['preprocessing'],
                       'package_version': config['package_version'],
-                      **execution_controls, 'execution_identity': native_identity,
+                      **execution_controls, 'execution_identity': config['execution_identity'],
+                      **runtime_summary,
                       'evidence_sha256': {name: _file_hash(out / name) for name in
                           ('config.json', 'splits.json', 'records.jsonl', 'selection.json', 'review.json')}}
             write_json(out / 'qualified-selection.json', locked)
@@ -639,6 +805,8 @@ def main(argv=None):
     parser.add_argument('--output-dir', type=Path)
     parser.add_argument('--run', action='store_true')
     parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--allow-blas-change', action='store_true',
+                        help='Explicitly allow compatible numerical-build changes and mixed-runtime evidence')
     args = parser.parse_args(argv)
     for name in ('train_size', 'folds', 'epochs', 'threads', 'max_candidates', 'top_k'):
         if getattr(args, name) <= 0:

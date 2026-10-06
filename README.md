@@ -225,11 +225,11 @@ this alignment does not establish 30% as the best-performing retention.
 `--refinement-rounds` is an optional safety cap, not a success condition; its
 default is unlimited within the candidate budget. Saved folds, settings,
 implementation snapshots, candidate records, and policy state support
-`--resume` only with matching settings, numerical runtime identity, and data.
+`--resume` defaults to matching settings, numerical runtime identity, and data.
 The runtime record includes Python/platform and scientific-package versions,
 package entrypoint and loaded scientific-extension hashes, and the loaded
 BLAS/OpenMP libraries' metadata, file hashes, and actual thread counts. This
-prevents mixing environments such as AOCL and MKL even when their package
+prevents unrequested mixing of environments such as AOCL and MKL even when their package
 versions agree. Runtime checks and the evaluator use the requested `--threads`
 setting; loading a qualified selection temporarily applies its recorded thread
 setting and then restores the caller's setting. The identity uses portable
@@ -244,6 +244,32 @@ after a runtime mismatch, restore the recorded environment before retrying. The
 guard covers loaded scientific binaries and identified BLAS/OpenMP libraries,
 not every dependency file or code already held in memory; it is not a tamper
 attestation or a guarantee of bitwise agreement across different hardware.
+
+For an intentional change between processes, `--resume --allow-blas-change`
+permits compatible AOCL/BLIS, MKL or OpenBLAS numerical builds. Python version,
+platform, NumPy/SciPy/scikit-learn/joblib/threadpoolctl versions, loaded scientific
+module names and ABI filenames, package source, native optimizer bytes, data,
+folds, seeds, parameters and thread counts must still match. NumPy, SciPy and
+scikit-learn build fingerprints can differ: this is permission to migrate
+between pinned-version numerical builds, not evidence that only BLAS machine
+code changed. Numerical differences can change selected observations or their
+order, especially near ties, and alter class predictions, CV scores and candidate
+rankings. Matching versions do not guarantee the same selected model.
+
+Completed records, their receipts and the original configuration remain
+unchanged. The first completed candidate under a different runtime records the
+transition in its existing receipt chain. A new evaluator fits outstanding
+candidates without reusing a prior process's screening cache; its runtime must
+stay unchanged throughout that process. Mixed-runtime searches require the flag
+on every subsequent resume, including a return to the original environment.
+Use `load_qualified_selection(path, allow_blas_change=True)` to consume such
+evidence. Exports identify the runtime of the selected candidate and the complete
+runtime history. Opt-in loading also returns the consuming runtime separately,
+without rewriting the export or inventing a fitting transition. Compare timing
+measurements only within one runtime; combining runtimes does not establish
+comparable fit or prediction performance. This mode applies only to searches
+started with the current checkpoint schema; older records are not rewritten.
+
 One coordinator at a time may use an output directory, including completed
 resume and qualified-selection export. A nonblocking operating-system lock
 rejects overlapping access; different output directories remain independent.
