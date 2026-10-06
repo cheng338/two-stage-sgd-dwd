@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Check pending Python signals every 1,024 completed native scalar updates on
+  the main thread. Propagate exceptions from the check out of the native loop
+  instead of returning a failed-update prefix. Preserve public exception
+  handling, update arithmetic, row cleanup and ordinary failure recovery.
+  The checks do not release the GIL.
 - Avoid an extra kernel-block copy for locally allocated cosine and constant
   outputs after shape and finite checks. Preserve independent copies for
   callable, imported-kernel and subclass-hook outputs. Reduce temporary

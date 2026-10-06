@@ -91,6 +91,82 @@ class NativeStepTests(unittest.TestCase):
                 self.every_prefix(1, rng.normal(size=n) * .2, .17,
                                   rows, labels, indices, rates, .31)
 
+    def test_signal_poll_boundaries_preserve_exact_ordered_updates(self):
+        # Signal delivery is checked by a separate process-level validation.
+        # This deterministic oracle checks updates immediately around a poll
+        # and across several polls without relying on OS scheduling or timers.
+        rng = np.random.default_rng(20261006)
+        features = np.ascontiguousarray(rng.normal(size=(7, 5)))
+        distances = np.sum((features[:, None, :] - features[None, :, :]) ** 2, axis=2)
+        gram = np.ascontiguousarray(np.exp(-.23 * distances))
+        labels = np.array([-1., 1., 1., -1., 1., -1., 1.])
+        indices = rng.integers(7, size=3073, dtype=np.int64)
+        rates = np.ascontiguousarray(.2 * (1. + np.arange(len(indices)) / 7.) ** -.75)
+        for kind, rows in ((0, features), (1, gram)):
+            initial = rng.normal(size=rows.shape[1]) * .07
+            initial_bytes = initial.tobytes()
+            inputs = (rows, labels, indices, rates)
+            input_bytes = tuple(value.tobytes() for value in inputs)
+            for stop in (1023, 1024, 1025, 2048, 3073):
+                expected, expected_bias = self.reference(
+                    kind, initial, -.17, rows, labels, indices[:stop], rates[:stop], .31)
+                providers = ("callable", "tuple") if kind == 0 else ("callable",)
+                for provider in providers:
+                    with self.subTest(kind=kind, completed=stop, provider=provider):
+                        calls = []
+
+                        def get_row(index):
+                            calls.append(index)
+                            return rows[index]
+
+                        row_source = tuple(rows) if provider == "tuple" else get_row
+                        actual, intercept, completed, error = _sgd_accel.run_steps(
+                            kind, initial, -.17, row_source, labels, indices[:stop], rates[:stop], .31)
+                        self.exact(actual, expected)
+                        self.exact(np.float64(intercept), np.float64(expected_bias))
+                        self.assertEqual(completed, stop)
+                        self.assertIsNone(error)
+                        if provider == "callable":
+                            self.assertEqual(calls, indices[:stop].tolist())
+                        self.assertEqual(initial.tobytes(), initial_bytes)
+                        self.assertEqual(tuple(value.tobytes() for value in inputs), input_bytes)
+                        self.assertFalse(np.shares_memory(actual, initial))
+
+    def test_callback_failures_around_signal_polls_preserve_committed_prefix(self):
+        rows = np.array([[1., .2], [.2, 1.]])
+        initial, labels = np.array([.2, -.3]), np.array([-1., 1.])
+        indices = np.asarray(np.arange(2051) % 2, dtype=np.int64)
+        rates = np.full(len(indices), .01)
+        for kind in (0, 1):
+            for completed in (1023, 1024, 1025, 2048):
+                expected, expected_bias = self.reference(
+                    kind, initial, .1, rows, labels, indices[:completed], rates[:completed], .2)
+                for error_type in (FloatingPointError, OverflowError, RuntimeError, KeyboardInterrupt):
+                    with self.subTest(kind=kind, completed=completed, error=error_type.__name__):
+                        calls = []
+                        failure = error_type("controlled failure at poll boundary")
+
+                        def get_row(index):
+                            calls.append(index)
+                            if len(calls) == completed + 1:
+                                raise failure
+                            return rows[index]
+
+                        if error_type in (FloatingPointError, OverflowError):
+                            actual, intercept, count, error = _sgd_accel.run_steps(
+                                kind, initial, .1, get_row, labels, indices, rates, .2)
+                            self.exact(actual, expected)
+                            self.exact(np.float64(intercept), np.float64(expected_bias))
+                            self.assertEqual(count, completed)
+                            self.assertEqual(error, str(failure))
+                        else:
+                            with self.assertRaises(error_type) as caught:
+                                _sgd_accel.run_steps(kind, initial, .1, get_row,
+                                                     labels, indices, rates, .2)
+                            self.assertIs(caught.exception, failure)
+                        self.assertEqual(calls, indices[:completed + 1].tolist())
+                        self.exact(initial, np.array([.2, -.3]))
+
     def test_large_projection_and_unit_ball_boundary_branches(self):
         cases = [np.array([3., 4.]), np.array([1e300, -2e300, 3e300]),
                  np.array([.6, .8]), np.array([1e-300, -1e-300]), np.zeros(5)]

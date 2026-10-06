@@ -233,6 +233,9 @@ numerical_end:
         Py_CLEAR(row);
         if (PyErr_Occurred()) goto cleanup;
         if (error != NULL) break;
+        /* Poll only after a committed update and released row. Signal-handler
+           exceptions propagate unchanged, including numerical exception types. */
+        if ((completed & 1023) == 0 && PyErr_CheckSignals() < 0) goto cleanup;
     }
     answer = Py_BuildValue("OdnO", current, bias, completed, error ? error : Py_None);
 cleanup:

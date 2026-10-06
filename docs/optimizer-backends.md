@@ -88,10 +88,26 @@ libraries. Inputs near `1e-160` repeatedly triggered fallback and were 16–19%
 slower in a small linear control. See [validation results](../VALIDATION.md).
 
 Direct C calls retain the GIL and bypass any internal NumPy GIL release. A
-native epoch can therefore hold it continuously; threaded responsiveness and
-concurrent-training throughput have not been benchmarked. The native loop
+native epoch can therefore hold it continuously, delaying other Python threads.
+Concurrent-training throughput has not been benchmarked. The native loop
 returns to Python between epochs. This optimization is independent of
 `prediction_backend` and applies only when the compiled optimizer is selected.
+
+## Interrupts during native fitting
+
+On the main Python thread, the native loop checks pending Python signals after
+every 1,024 completed scalar updates, after releasing the current row. This
+allows a pending interrupt to raise during a long epoch. The native loop
+propagates exceptions from this check instead of returning a failed-update
+prefix. Public estimators retain their existing exception handling. A normal
+`KeyboardInterrupt` leaves the fit unfitted and does not produce a resumable
+optimizer checkpoint.
+
+These checks do not release the GIL or make Python signal handlers execute in
+worker threads. They provide no wall-clock latency guarantee: one expensive
+update, including a kernel evaluation or BLAS call, can still delay handling.
+The update formulas, sampling, learning rates and ordinary numerical-failure
+recovery are unchanged.
 
 ## Lazy kernel-column cache
 
