@@ -151,7 +151,12 @@ class ReplacementStreamTests(unittest.TestCase):
 
     def test_bit_generator_subclass_is_not_admitted_by_base_class_membership(self):
         rng = np.random.Generator(DerivedPCG64(7))
-        oracle = copy.deepcopy(rng)
+        # NumPy 1 pickles custom bit generators by registry name. This helper
+        # never copies the generator, so construct its oracle independently.
+        oracle = np.random.Generator(DerivedPCG64(7))
+        self.assertIs(type(oracle), type(rng))
+        self.assertIs(type(oracle.bit_generator), type(rng.bit_generator))
+        self.assertEqual(state_bytes(oracle), state_bytes(rng))
         original_asarray = np.asarray
         with patch.object(_native_optimizer.np, 'asarray', wraps=original_asarray) as array:
             actual = _native_optimizer._replacement_indices(rng, 17)

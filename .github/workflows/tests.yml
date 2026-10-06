@@ -1,0 +1,124 @@
+name: Installed Windows wheels
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installed-wheels:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: py310-numpy1-native
+            python: '3.10'
+            flavor: native
+            accel: '1'
+            numpy: '1.24.4'
+            scipy: '1.10.1'
+            sklearn: '1.6.1'
+            joblib: '1.3.2'
+          - name: py310-numpy1-portable
+            python: '3.10'
+            flavor: portable
+            accel: '0'
+            numpy: '1.24.4'
+            scipy: '1.10.1'
+            sklearn: '1.6.1'
+            joblib: '1.3.2'
+          - name: py312-numpy2-native
+            python: '3.12'
+            flavor: native
+            accel: '1'
+            numpy: '2.5.2'
+            scipy: '1.18.0'
+            sklearn: '1.9.0'
+            joblib: '1.5.3'
+          - name: py312-numpy2-portable
+            python: '3.12'
+            flavor: portable
+            accel: '0'
+            numpy: '2.5.2'
+            scipy: '1.18.0'
+            sklearn: '1.9.0'
+            joblib: '1.5.3'
+    env:
+      PYTHONPATH: ''
+      PYTHONHOME: ''
+      PYTHONNOUSERSITE: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      OMP_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+      BLIS_NUM_THREADS: '1'
+      SGD_BUILD_ACCEL: ${{ matrix.accel }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Prepare isolated environment and pinned dependencies
+        run: |
+          $run = Join-Path $env:RUNNER_TEMP 'sgd-${{ matrix.name }}'
+          if (Test-Path -LiteralPath $run) { throw "Expected a fresh run directory: $run" }
+          New-Item -ItemType Directory -Path $run | Out-Null
+          python -I -m venv "$run/venv"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $python = Join-Path $run 'venv/Scripts/python.exe'
+          & $python -I -m pip install 'setuptools==80.9.0' 'wheel==0.45.1' 'pytest==9.1.1' `
+            'numpy==${{ matrix.numpy }}' 'scipy==${{ matrix.scipy }}' `
+            'scikit-learn==${{ matrix.sklearn }}' 'joblib==${{ matrix.joblib }}' 'threadpoolctl==3.5.0'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "SGD_CI_RUN=$run" >> $env:GITHUB_ENV
+          "SGD_CI_PYTHON=$python" >> $env:GITHUB_ENV
+      - name: Build and install exactly one wheel
+        run: |
+          New-Item -ItemType Directory -Path "$env:SGD_CI_RUN/reports" | Out-Null
+          & $env:SGD_CI_PYTHON -I -m pip wheel . --no-deps --no-build-isolation --wheel-dir "$env:SGD_CI_RUN/wheels"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $wheels = @(Get-ChildItem -LiteralPath "$env:SGD_CI_RUN/wheels" -Filter '*.whl')
+          if ($wheels.Count -ne 1) { throw 'Expected exactly one built wheel.' }
+          Get-FileHash -LiteralPath $wheels[0].FullName -Algorithm SHA256 | ConvertTo-Json | Set-Content "$env:SGD_CI_RUN/reports/wheel.json"
+          & $env:SGD_CI_PYTHON -I -m pip install --no-deps $wheels[0].FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $env:SGD_CI_PYTHON -I -m pip check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $env:SGD_CI_PYTHON -I -m pip freeze --all | Set-Content "$env:SGD_CI_RUN/reports/environment.txt"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check installed paths and required backend behavior
+        run: |
+          & $env:SGD_CI_PYTHON -I -B tools/check_installed.py --flavor '${{ matrix.flavor }}' --report "$env:SGD_CI_RUN/reports/installed.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Stage a source-free test bundle and run the full suite
+        run: |
+          $bundle = Join-Path $env:SGD_CI_RUN 'test-bundle'
+          New-Item -ItemType Directory -Path $bundle | Out-Null
+          Copy-Item -LiteralPath tests,examples -Destination $bundle -Recurse
+          Copy-Item -LiteralPath setup.py -Destination $bundle
+          if (Test-Path -LiteralPath "$bundle/src") { throw 'The test bundle must not contain src.' }
+          Set-Location -LiteralPath $bundle
+          & $env:SGD_CI_PYTHON -I -B -m pytest -ra tests --junitxml="$env:SGD_CI_RUN/reports/pytest.xml" 2>&1 | Tee-Object -FilePath "$env:SGD_CI_RUN/reports/pytest.txt"
+          $result = $LASTEXITCODE
+          if (Test-Path -LiteralPath "$bundle/src") { throw 'A source package appeared in the test bundle.' }
+          & $env:SGD_CI_PYTHON -I -B "$env:GITHUB_WORKSPACE/tools/check_installed.py" --flavor '${{ matrix.flavor }}' --report "$env:SGD_CI_RUN/reports/postflight.json" --junit "$env:SGD_CI_RUN/reports/pytest.xml"
+          $checkResult = $LASTEXITCODE
+          if ($result -ne 0) { exit $result }
+          exit $checkResult
+      - name: Save wheel and verification reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: installed-wheel-${{ matrix.name }}
+          path: |
+            ${{ runner.temp }}/sgd-${{ matrix.name }}/wheels/*.whl
+            ${{ runner.temp }}/sgd-${{ matrix.name }}/reports/*
+          if-no-files-found: warn

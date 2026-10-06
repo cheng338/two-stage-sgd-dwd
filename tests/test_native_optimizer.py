@@ -85,7 +85,7 @@ class NativeOptimizerTests(ExactAssertions):
                 rng.bit_generator.state = copy.deepcopy(model.initial_state_['rng_state'])
                 m = len(self.X)
                 for epoch, (indices, rates) in enumerate(requests):
-                    expected = (rng.permutation(m) if sampling == 'shuffle' else
+                    expected = (np.asarray(rng.permutation(m), dtype=np.int64) if sampling == 'shuffle' else
                                 np.array([int(rng.integers(m)) for _ in range(m)], dtype=np.int64))
                     self.assertExact(indices, expected)
                     expected_rates = np.array([(1 / model.learning_rate_B_) *

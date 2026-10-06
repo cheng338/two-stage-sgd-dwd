@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import numpy as np
+from numpy.random import _pickle as numpy_rng_pickle
 from sklearn import config_context
 
 from two_stage_sgd_dwd import KernelSGDDWD, NumericalFailure, TwoStageDWDClassifier
@@ -250,8 +251,15 @@ class NativeRBFFitTests(unittest.TestCase):
         generators = (CustomGenerator(np.random.PCG64(17)),
                       np.random.Generator(CustomPCG64(17)))
         for rng in generators:
-            with self.subTest(generator=type(rng).__name__, bit=type(rng.bit_generator).__name__):
+            # NumPy 1 restores bit generators by registered name. Keep this
+            # fixture copyable without replacing its exact Generator type or
+            # custom BitGenerator type, both of which affect loader dispatch.
+            with self.subTest(generator=type(rng).__name__, bit=type(rng.bit_generator).__name__), \
+                    patch.dict(numpy_rng_pickle.BitGenerators, {'CustomPCG64': CustomPCG64}):
                 external = pickle.dumps(rng, protocol=5)
+                copied = copy.deepcopy(rng)
+                self.assertIs(type(copied), type(rng))
+                self.assertIs(type(copied.bit_generator), type(rng.bit_generator))
                 with factory_spy() as factory:
                     native = KernelSGDDWD(max_epochs=2, random_state=rng,
                                          optimizer_backend='native').fit(X, y)

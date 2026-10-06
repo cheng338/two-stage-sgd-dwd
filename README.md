@@ -52,6 +52,14 @@ Native builds on CPython 3.10 use its version-specific ABI. Builds on CPython
 stable-ABI wheel cannot be installed on Python 3.10; that interpreter needs a
 matching native build or the portable distribution.
 
+The repository's Windows CI workflow builds and installs native and portable wheels on
+Python 3.10 with NumPy 1 and Python 3.12 with NumPy 2. It checks installed
+package and extension locations, version agreement, and actual backend use
+before running the full suite from a separate test bundle without `src`.
+Native jobs require compiled fits; portable jobs require an absent extension
+and working automatic Python fallback. Each job saves its wheel, dependency
+versions, installed-package check, and test report.
+
 # Example
 
 ```python

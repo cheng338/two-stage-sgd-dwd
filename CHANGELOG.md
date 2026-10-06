@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add Windows installed-wheel checks for Python 3.10 with NumPy 1 and Python
+  3.12 with NumPy 2, covering native and portable builds. Require installed
+  package origins and actual backend behavior before running the full suite
+  from a separate test bundle without package sources; retain environment,
+  wheel and test reports.
 - Apply post-fit `TwoStageDWDClassifier.prediction_batch_size` changes to each
   prediction call through a read-only child-scoring override. Validate parent
   and child block sizes, preserve fitted child state, and retain training and
