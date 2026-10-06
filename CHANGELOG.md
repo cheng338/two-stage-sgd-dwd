@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.0 - 2026-10-06
 
 - Add an optional read-only example helper to summarize charged component times
   separately for newly evaluated and replayed folds in a completed candidate.

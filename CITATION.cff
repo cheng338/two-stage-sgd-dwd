@@ -3,8 +3,8 @@
   "message": "Please cite this software version and Chang Cheng's dissertation, Chapter 3.",
   "type": "software",
   "title": "two-stage-sgd-dwd: Two-Stage DWD via Stochastic Gradient Descent",
-  "version": "0.8.0",
-  "date-released": "2026-10-05",
+  "version": "0.9.0",
+  "date-released": "2026-10-06",
   "authors": [
     {"family-names": "Cheng", "given-names": "Chang"}
   ],
@@ -18,7 +18,7 @@
       "institution": {"name": "Purdue University"},
       "thesis-type": "Doctoral dissertation manuscript",
       "year": 2026,
-      "notes": "Chapter 3, Our Earlier Attempt on Kernel DWD. Revised manuscript supplied October 1, 2026; the title page is dated December 2026."
+      "notes": "Chapter 3, Our Earlier Attempt on Kernel DWD. Revised manuscript supplied October 4, 2026; the title page is dated December 2026."
     },
     {
       "type": "software",
