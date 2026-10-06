@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import platform
 import time
+import warnings
 
 import numpy as np
 import joblib
@@ -334,12 +335,36 @@ def _verify_receipts(records, *, run_sha256):
 
 
 def write_json(path, value):
+    payload = json.dumps(value, indent=2, allow_nan=False) + '\n'
     temporary = path.with_suffix(path.suffix + '.tmp')
-    with temporary.open('w', encoding='utf-8') as stream:
-        stream.write(json.dumps(value, indent=2, allow_nan=False) + '\n')
-        stream.flush()
-        os.fsync(stream.fileno())
-    temporary.replace(path)
+    stream = temporary.open('w', encoding='utf-8')
+    try:
+        with stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+    except BaseException:
+        # Opening succeeded, so this attempt owns the temporary file. A
+        # cleanup failure must not replace the original write/interruption.
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
+def _write_failure_json(path, value):
+    """Report a failed evaluation without replacing its original exception."""
+    try:
+        write_json(path, value)
+    except Exception as logging_error:
+        try:
+            warnings.warn(f'Could not write {path.name}: {logging_error}',
+                          RuntimeWarning, stacklevel=2)
+        except Exception:
+            # A warnings-as-errors policy must preserve the evaluation error.
+            pass
 
 
 def balanced_indices(y, count, seed):
@@ -665,9 +690,9 @@ def _run_search(args, *, param_grid):
                 failure = {'stage': stage, 'params': dict(params),
                            'error_type': type(exc).__name__, 'message': str(exc),
                            'completed_candidates': len(records)}
-                write_json(out / 'failure.json', failure)
+                _write_failure_json(out / 'failure.json', failure)
                 state = 'interrupted' if isinstance(exc, (KeyboardInterrupt, SystemExit)) else 'failed'
-                write_json(out / 'status.json', {'state': state, **failure,
+                _write_failure_json(out / 'status.json', {'state': state, **failure,
                            'final_evaluation_eligible': False, 'final_refit_performed': False,
                            'held_out_scored': False, 'official_test_partition_loaded': False})
                 raise

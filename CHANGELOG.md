@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Preserve evaluation exceptions and interruptions when adaptive MNIST failure
+  diagnostics cannot be written. Attempt failure and status reports separately;
+  keep successful checkpoint writes strict. Validate JSON before creating its
+  temporary file and clean up owned temporary files after failed writes without
+  replacing the original error if cleanup also fails.
 - Add explicit `--allow-blas-change` support for compatible numerical-build
   changes between adaptive MNIST processes. Preserve completed receipts and the
   original configuration, record transitions with the next completed candidate,
