@@ -355,6 +355,10 @@ batch policy. The optimizer's `batch_size` is separate from
 `prediction_batch_size`, which only controls kernel scoring memory. Full-batch
 kernel updates use bounded scoring blocks with frozen parameters and retain
 no full Gram cache. An interrupted batch is not partially committed.
+Changing a fitted `TwoStageDWDClassifier` with
+`set_params(prediction_batch_size=...)` controls subsequent prediction blocks
+without refitting or changing its fitted kernel child's parameter. The size
+must remain a positive integer; invalid values are rejected at prediction time.
 
 New `KernelSGDDWD` and `TwoStageDWDClassifier` instances default to
 `prediction_backend="blas"`, using guarded matrix-product distances for

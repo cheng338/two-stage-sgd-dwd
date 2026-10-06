@@ -660,18 +660,22 @@ class KernelSGDDWD(_BaseDWD):
     def decision_function(self, X):
         return self._decision_function_with_backend(X)
 
-    def _decision_function_with_backend(self, X, backend=None):
-        """Apply a prediction choice without changing fitted model state."""
+    def _decision_function_with_backend(self, X, backend=None, *, prediction_batch_size=None):
+        """Apply prediction controls without changing fitted model state."""
         check_is_fitted(self)
         _integer(self.prediction_batch_size, "prediction_batch_size")
+        if prediction_batch_size is None:
+            prediction_batch_size = self.prediction_batch_size
+        else:
+            _integer(prediction_batch_size, "prediction_batch_size")
         X = validate_data(self, X, reset=False, dtype=np.float64, accept_sparse=False)
         backend = _prediction_backend(self) if backend is None else backend
         if self._kernel_spec_.kernel == "rbf" and self.gamma_ > 0:
             scores = rbf_prediction_scores_blas if backend == "blas" else rbf_prediction_scores
             return scores(X, self.basis_, self.dual_coef_[0], self.intercept_[0],
-                          self.gamma_, self.prediction_batch_size)
+                          self.gamma_, prediction_batch_size)
         return _scores("kernel", X, self.dual_coef_[0], self.intercept_[0],
-                       self.basis_, self.gamma_, self.prediction_batch_size,
+                       self.basis_, self.gamma_, prediction_batch_size,
                        kernel_spec=self._kernel_spec_)
 
     def rkhs_norm_squared(self):
@@ -724,7 +728,8 @@ class TwoStageDWDClassifier(_BaseDWD):
     optimizer_backend applies to both stages. stage_diagnostics_ reports each
     actual backend; optimizer_backend_ is 'mixed' if stage paths differ.
     prediction_backend='blas' (the default) or 'direct' follows KernelSGDDWD and
-    affects only kernel-stage prediction. The top-level choice also applies after fitting.
+    affects only kernel-stage prediction. Both top-level prediction_backend and
+    prediction_batch_size apply after fitting without changing the fitted child.
     """
     def __init__(self, *, retention_fraction=0.3, lambd=1e-6,
                  kernel="rbf", gamma="scale", kernel_kws=None,
@@ -868,5 +873,7 @@ class TwoStageDWDClassifier(_BaseDWD):
 
     def decision_function(self, X):
         check_is_fitted(self)
+        _integer(self.prediction_batch_size, "prediction_batch_size")
         X = validate_data(self, X, reset=False, dtype=np.float64, accept_sparse=False)
-        return self.kernel_estimator_._decision_function_with_backend(X, _prediction_backend(self))
+        return self.kernel_estimator_._decision_function_with_backend(
+            X, _prediction_backend(self), prediction_batch_size=self.prediction_batch_size)

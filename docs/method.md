@@ -158,12 +158,14 @@ so overshoot is possible. A completed finite update remains usable after a cap.
 
 ## Fitted state and failure status
 
-Fitted hyperparameters are frozen for prediction and objective diagnostics;
-changing constructor parameters takes effect on the next fit. A fitted
-`KernelSGDDWD` still reads its current `prediction_batch_size` for scoring
-blocks. For a fitted two-stage model, adjust that parameter on
-`kernel_estimator_`; changing it on the outer estimator applies to the next
-fit. This setting controls scoring memory, not the fitted coefficients.
+Fitted training hyperparameters are frozen for prediction and objective
+diagnostics; changing them takes effect on the next fit. A fitted
+`KernelSGDDWD` reads its current `prediction_batch_size` for scoring blocks.
+A fitted `TwoStageDWDClassifier` uses its own current `prediction_batch_size`
+on each prediction call through a read-only child override. The child's stored
+parameter is unchanged; direct child predictions and RKHS-norm diagnostics use
+the child's own validated block size. This setting controls scoring memory,
+not the fitted coefficients.
 
 Standalone models expose `initial_state_`, `final_state_`, `selected_state_`,
 `selected_iteration_`, `n_updates_`, `n_samples_seen_`, `n_epochs_`, `history_`, `learning_rate_B_`,

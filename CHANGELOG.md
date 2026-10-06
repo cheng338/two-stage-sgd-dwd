@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Apply post-fit `TwoStageDWDClassifier.prediction_batch_size` changes to each
+  prediction call through a read-only child-scoring override. Validate parent
+  and child block sizes, preserve fitted child state, and retain training and
+  prediction defaults.
 - Align batch-methodology and study-status documentation with the October 4
   dissertation: averaged batch updates are already permitted, while the
   completed replicated study uses single-observation updates with replacement.

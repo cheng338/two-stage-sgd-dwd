@@ -45,6 +45,7 @@ class PredictionBlockTests(unittest.TestCase):
             kernel = getattr(model, "kernel_estimator_", model)
             for size in (1, 2, 4, 11, 256):
                 with self.subTest(model=type(model).__name__, batch_size=size):
+                    model.set_params(prediction_batch_size=size)
                     kernel.prediction_batch_size = size
                     expected = self.original(kernel, self.query)
                     self.assert_bits(model.decision_function(self.query), expected)
