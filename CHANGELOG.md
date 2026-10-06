@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add a small external scikit-learn one-vs-one example with copied per-pair
+  diagnostics. Document pair-local labels and observation IDs, selection
+  failures and validation-data limitations; preserve binary estimators,
+  defaults and SGD updates.
 - Add Windows installed-wheel checks for Python 3.10 with NumPy 1 and Python
   3.12 with NumPy 2, covering native and portable builds. Require installed
   package origins and actual backend behavior before running the full suite

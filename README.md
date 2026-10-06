@@ -387,7 +387,40 @@ batch updates, including full-gradient updates. The reported Chapter 5 study
 uses single-observation updates with replacement; it does not use optional
 shuffling. See the [alignment note](docs/dissertation-batch-alignment.md) for
 the batch equations, learning-rate clock, and sampling and proof distinctions.
-The package remains **binary only**; multiclass DWD is not implemented here.
+The package's estimators accept binary targets. Multiclass prediction can be
+composed externally using scikit-learn's existing one-vs-one wrapper.
+
+# Multiclass composition
+
+[The multiclass example](examples/multiclass_example.py) wraps
+`TwoStageDWDClassifier` in scikit-learn's
+[`OneVsOneClassifier`](https://scikit-learn.org/stable/modules/generated/sklearn.multiclass.OneVsOneClassifier.html).
+For `K` classes, it fits `K * (K - 1) / 2` unchanged binary estimators on raw
+feature arrays and delegates voting and score aggregation to scikit-learn.
+The wrapper's decision scores combine votes and confidence for tie breaking;
+they are not DWD margins or class probabilities.
+The example places training-only standardization before the wrapper in a
+pipeline and uses serial pair fits with one native thread. Its tiny synthetic
+dataset illustrates composition; its accuracy is not a performance study.
+The example's `retention_fraction=1.0` avoids single-class selections in this
+small demonstration. It is not a retention recommendation or a default change.
+
+The example's `pair_diagnostics(model)` helper copies each successful pair's
+sample and retention counts, status, stage diagnostics and seeds. The reported
+class pair uses original labels; selected class counts follow that order.
+Scikit-learn passes pair-local labels `0` and `1` to the binary estimators.
+Their selected indices and default observation IDs refer to pair-local rows,
+not the original multiclass data. The helper accepts the fitted wrapper itself,
+as shown in the example.
+
+Smaller retention fractions keep the existing global boundary-selection rule:
+single-class selections raise `SelectionError` without redraws or class quotas.
+If a pair fit fails, the wrapper propagates the error and does not provide a
+public record of the failing clone's diagnostics. Discard that wrapper and
+create a new one before retrying; do not inspect it as a completed fit.
+Do not pass multiclass `validation_data` directly through the wrapper: it does
+not filter and relabel that tuple for each pair. This example uses fixed epochs
+and passes no fit metadata.
 
 # Optimizer backends and lazy kernel columns
 
