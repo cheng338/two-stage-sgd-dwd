@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add an optional read-only example helper to summarize charged component times
+  separately for newly evaluated and replayed folds in a completed candidate.
+  Preserve historical measurements and explicit completion-evaluation scope;
+  reject missing replay metadata and invalid times. Leave runner records,
+  recovery schemas, fitting and search behavior unchanged.
 - Save an atomic completed-fold prefix for the adaptive MNIST runner's active
   candidate and inherited-default control. Verify run, candidate, stage, runtime
   and preceding-record identities before reuse; retain original fold evidence

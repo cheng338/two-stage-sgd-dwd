@@ -305,6 +305,28 @@ fails before completing its first fold, returning to a runtime already allowed
 by the saved configuration and completed records does not require another
 opt-in; the empty marker is archived before restarting that candidate.
 
+For a completed record whose run evidence has already been verified, the optional
+reporting helper separates recorded costs for new and replayed folds:
+
+```python
+# From the source checkout; record is an already verified JSON-native
+# completed entry from records.jsonl or inherited-default-control.json.
+from examples._mnist_timing import summarize_candidate_timing
+
+timing = summarize_candidate_timing(record)
+print(timing["newly_evaluated_folds"]["component_seconds"])
+print(timing["replayed_folds"]["component_seconds"])
+```
+
+The scope is `candidate_completion_evaluation`: reading the same saved record
+later reports its historical completion, not work performed by the new reader.
+The helper sums charged linear, selection, kernel-fit and scoring seconds within
+each group; cached linear reference costs are not charged again. These component
+sums are not wall time or a whole-session benchmark, and exclude abandoned work.
+Elapsed time is reported separately when present; the inherited control has none.
+Missing legacy replay metadata is rejected rather than interpreted as fresh work.
+The helper does not verify receipts, alter records or combine numerical runtimes.
+
 One coordinator at a time may use an output directory, including completed
 resume and qualified-selection export. A nonblocking operating-system lock
 rejects overlapping access; different output directories remain independent.
