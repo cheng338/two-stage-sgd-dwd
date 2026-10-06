@@ -37,6 +37,19 @@ _PLAN_SCHEMA_VERSION = 3
 _RECEIPT_SCHEMA_VERSION = 1
 
 
+def _io_path(path):
+    """Use extended Windows paths for I/O, retaining explicit namespace paths."""
+    path = Path(path)
+    if os.name != 'nt':
+        return path
+    value = os.fspath(path)
+    if value.startswith(('\\\\?\\', '\\\\.\\')):
+        return path
+    absolute = os.path.abspath(value)
+    return Path('\\\\?\\UNC\\' + absolute[2:] if absolute.startswith('\\\\')
+                else '\\\\?\\' + absolute)
+
+
 class SearchBusyError(RuntimeError):
     """The search directory already has a coordinator, or cannot be locked."""
 
@@ -49,7 +62,7 @@ class _RunLease:
     def __enter__(self):
         descriptor = None
         try:
-            descriptor = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
+            descriptor = os.open(_io_path(self.path), os.O_RDWR | os.O_CREAT, 0o600)
             os.set_inheritable(descriptor, False)
             self.stream = os.fdopen(descriptor, 'r+b', buffering=0)
             descriptor = None
@@ -167,7 +180,7 @@ def _unique_json_object(pairs):
 
 
 def _read_json(path):
-    return json.loads(path.read_text(encoding='utf-8'),
+    return json.loads(_io_path(path).read_text(encoding='utf-8'),
                       object_pairs_hook=_unique_json_object)
 
 
@@ -336,6 +349,7 @@ def _verify_receipts(records, *, run_sha256):
 
 def write_json(path, value):
     payload = json.dumps(value, indent=2, allow_nan=False) + '\n'
+    path = _io_path(path)
     temporary = path.with_suffix(path.suffix + '.tmp')
     stream = temporary.open('w', encoding='utf-8')
     try:
@@ -382,6 +396,7 @@ def balanced_indices(y, count, seed):
 
 def read_records(path, *, expected_folds, execution_identity, run_sha256, recover=True,
                  allow_blas_change=False, current_execution_identity=None, threads=None):
+    path = _io_path(path)
     original = path.read_bytes()
     raw = original.decode('utf-8')
     lines = raw.splitlines(keepends=True)
@@ -421,6 +436,7 @@ def read_records(path, *, expected_folds, execution_identity, run_sha256, recove
 
 
 def verify_implementation_snapshot(directory, hashes):
+    directory = _io_path(directory)
     for name, expected in hashes.items():
         path = directory / name
         if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
@@ -428,7 +444,7 @@ def verify_implementation_snapshot(directory, hashes):
 
 
 def _file_hash(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    return hashlib.sha256(_io_path(path).read_bytes()).hexdigest()
 
 
 def _execution_controls(args):
@@ -443,9 +459,9 @@ def _execution_controls(args):
 
 
 def _implementation_bytes(identity):
-    package = Path(two_stage_sgd_dwd.__file__).parent
+    package = _io_path(Path(two_stage_sgd_dwd.__file__).parent)
     files = list(package.glob('*.py'))
-    files += [Path(__file__).with_name(name) for name in
+    files += [_io_path(Path(__file__).with_name(name)) for name in
               ('tune_mnist.py', '_adaptive_grid.py', '_mnist_cv.py', '_runtime_identity.py')]
     if identity['extension_available']:
         name = identity['extension_filename']
@@ -480,7 +496,8 @@ def load_qualified_selection(directory, *, allow_blas_change=False):
     """
     directory = Path(directory)
     with _RunLease(directory / '.run.lock'):
-        return _load_qualified_selection_locked(directory, allow_blas_change=allow_blas_change)
+        return _load_qualified_selection_locked(
+            _io_path(directory), allow_blas_change=allow_blas_change)
 
 
 def _load_qualified_selection_locked(directory, *, allow_blas_change=False):
@@ -602,8 +619,9 @@ def _run_search(args, *, param_grid):
     run_sha256 = _run_sha256(config, split_payload)
     out = Path(args.output_dir)
     if not args.resume:
-        out.mkdir(parents=True, exist_ok=False)
+        _io_path(out).mkdir(parents=True, exist_ok=False)
     with _RunLease(out / '.run.lock'):
+        out = _io_path(out)
         if args.resume:
             saved = _read_json(out / 'config.json')
             _verify_config_schema(saved)

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Use extended Windows paths for adaptive MNIST output and checkpoint I/O,
+  including temporary files, run locks, implementation snapshots, resume and
+  qualified-selection reads. Preserve caller-supplied paths and lock messages,
+  strict checkpoint validation, and existing failure-recovery behavior.
 - Preserve evaluation exceptions and interruptions when adaptive MNIST failure
   diagnostics cannot be written. Attempt failure and status reports separately;
   keep successful checkpoint writes strict. Validate JSON before creating its

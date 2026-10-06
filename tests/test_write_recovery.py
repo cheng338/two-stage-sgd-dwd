@@ -10,6 +10,19 @@ import pytest
 from test_tune_mnist import _RUNNER, Scores, arguments, records, synthetic
 
 
+def _same_path(left, right):
+    """Compare actual I/O targets without depending on the production adapter."""
+    def key(value):
+        value = os.fspath(value)
+        if os.name == 'nt':
+            if value.startswith('\\\\?\\UNC\\'):
+                value = '\\\\' + value[8:]
+            elif value.startswith('\\\\?\\'):
+                value = value[4:]
+        return os.path.normcase(os.path.abspath(value))
+    return key(left) == key(right)
+
+
 class _ObservedStream:
     """Use a real temporary file while injecting one deterministic I/O failure."""
 
@@ -175,7 +188,7 @@ def test_atomic_failure_removes_owned_temporary_and_preserves_primary(tmp_path, 
 
     def open_temporary(path, *args, **kwargs):
         stream = original_open(path, *args, **kwargs)
-        return _ObservedStream(stream, events, stage, failure) if path == temporary else stream
+        return _ObservedStream(stream, events, stage, failure) if _same_path(path, temporary) else stream
 
     def fsync(descriptor):
         events.append('fsync')
@@ -185,7 +198,7 @@ def test_atomic_failure_removes_owned_temporary_and_preserves_primary(tmp_path, 
 
     def replace(path, destination):
         events.append('replace')
-        if path == temporary and stage == 'replace':
+        if _same_path(path, temporary) and stage == 'replace':
             raise failure
         return original_replace(path, destination)
 
@@ -211,7 +224,7 @@ def test_failed_temporary_acquisition_does_not_unlink_unowned_path(tmp_path, pre
     original_open, original_unlink = Path.open, Path.unlink
 
     def deny_open(path, *args, **kwargs):
-        if path == temporary:
+        if _same_path(path, temporary):
             raise failure
         return original_open(path, *args, **kwargs)
 
@@ -235,7 +248,7 @@ def test_cleanup_permission_error_does_not_replace_primary_error(tmp_path):
     original_unlink = Path.unlink
 
     def deny_cleanup(path, *args, **kwargs):
-        if path == temporary:
+        if _same_path(path, temporary):
             raise cleanup
         return original_unlink(path, *args, **kwargs)
 
@@ -275,7 +288,7 @@ def test_successful_write_flushes_and_syncs_before_closed_file_replace(tmp_path)
 
     def open_temporary(path, *args, **kwargs):
         stream = original_open(path, *args, **kwargs)
-        if path == temporary:
+        if _same_path(path, temporary):
             opened.append(stream)
             events.append('open')
             return _ObservedStream(stream, events)
@@ -287,7 +300,7 @@ def test_successful_write_flushes_and_syncs_before_closed_file_replace(tmp_path)
         return original_fsync(descriptor)
 
     def replace(path, destination):
-        assert path == temporary and destination == target
+        assert _same_path(path, temporary) and _same_path(destination, target)
         assert opened[0].closed
         events.append('replace')
         return original_replace(path, destination)
