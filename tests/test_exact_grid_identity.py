@@ -63,18 +63,18 @@ def test_numeric_types_normalize_to_float_without_decimal_rounding(value):
 
 
 def test_preserved_retention_boundary_changes_actual_selected_count():
-    fractions = [.3, math.nextafter(.3, math.inf)]
+    fractions = [math.nextafter(.3, 0.), .3]
     grid = {key: [item] for key, item in parameters().items()}
     grid['retention_fraction'] = fractions
     result = _GRID.next_search_stage([], grid, _GRID.AdaptiveSearchConfig())
     candidates = result['candidates']
     assert [p['retention_fraction'] for p in candidates] == fractions
-    X = np.arange(-5, 5, dtype=float).reshape(10, 1)
+    X = (np.arange(-5, 5, dtype=float) + .5).reshape(10, 1)
     y = np.where(X[:, 0] < 0, -1, 1)
-    models = [TwoStageDWDClassifier(**p, max_epochs=1, stopping='fixed',
+    models = [TwoStageDWDClassifier(**p, max_epochs=1, stopping='fixed', batch_size='full',
                                    random_state=13).fit(X, y) for p in candidates]
-    assert [model.n_retained_ for model in models] == [3, 4]
-    assert [len(model.selected_indices_) for model in models] == [3, 4]
+    assert [model.n_retained_ for model in models] == [2, 3]
+    assert [len(model.selected_indices_) for model in models] == [2, 3]
 
 
 def test_exact_keys_do_not_change_numeric_tie_break_order():

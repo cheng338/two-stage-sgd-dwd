@@ -1,5 +1,51 @@
 # Changelog
 
+## Unreleased
+
+Planned release: **0.9.1**. Changes accumulate here until release preparation;
+the published version remains 0.9.0. See the [release policy](docs/release-policy.md).
+
+- Use patch releases for grouped fixes, performance improvements and optional
+  diagnostics or workflow controls. Reserve minor releases for substantial new
+  estimator capabilities or incompatible changes to the public estimator
+  contract. Keep
+  existing release numbers and artifacts unchanged.
+- Round the two-stage retained count down with
+  `floor(retention_fraction * N)`, matching the ensemble classifiers' count
+  convention. Preserve global score ranking and tie breaking, without adding
+  rows to meet a minimum count or class quota. Report an empty selection as
+  `SelectionError` with status `empty_selection`; retain
+  `single_class_selection` for a nonempty one-class subset. New fits may use
+  one fewer row and produce different fitted results. Existing study records
+  and saved models are unchanged. Earlier adaptive searches require a fresh
+  output directory because their implementation identity differs.
+- Require Python 3.11 or newer. Remove the version-specific Python 3.10 native
+  build path, retain the Python 3.11 stable ABI for supported native builds,
+  and move the NumPy 1 installed-wheel CI jobs to Python 3.11. Portable wheels
+  have the same minimum Python version. Numerical code and SGD updates are
+  unchanged by this packaging change.
+- Compare adaptive MNIST CV accuracies using exact equal-weight means of the
+  recorded correct/validation counts. Preserve the existing parameter tie
+  order and genuine improvements, including improvements smaller than one
+  floating-point unit. Validate count evidence on replay and bind exact score
+  identities to policy state and qualified selections. Custom scalar-only
+  examples remain supported. Older adaptive checkpoints require a new output
+  directory; ordinary scikit-learn `make_search` behavior is unchanged.
+- Recover representable geometric grid extensions and midpoints when the
+  original floating-point calculation incorrectly refuses them. Use the same
+  geometric rule, retain every previously successful coordinate, and continue
+  to refuse true arithmetic limits and intervals with no interior value.
+- Add optional external `prediction_profile()` records for bounded RBF scoring:
+  kernel, score and guard times, completed blocks, and direct-fallback reasons
+  and counts. Preserve numerical operations and fitted state. Profiling is off
+  by default; enabled timings include instrumentation overhead.
+- Stabilize the BLAS predictor's near-constant RBF scores when coefficient and
+  intercept cancellation reaches the floating-point error envelope. Recompute
+  only those rows using direct distances, `expm1` and compensated summation,
+  subject to a binary64 precision guard. Preserve the explicit direct backend,
+  training updates and ordinary prediction scores. Record diagnostic probes
+  separately from applied corrections.
+
 ## 0.9.0 - 2026-10-06
 
 - Add an optional read-only example helper to summarize charged component times

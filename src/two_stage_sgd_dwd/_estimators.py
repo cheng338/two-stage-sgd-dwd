@@ -826,10 +826,13 @@ class TwoStageDWDClassifier(_BaseDWD):
             self.n_retained_ = len(self.selected_indices_)
             self.n_samples_fit_ = len(y)
             if np.any(self.selected_class_counts_ == 0):
-                self.model_status_, self.stop_reason_ = "single_class_selection", "selection_failure"
+                status = "empty_selection" if self.n_retained_ == 0 else "single_class_selection"
+                message = ("The retention fraction selects no observations" if self.n_retained_ == 0
+                           else "The globally selected subset contains only one class")
+                self.model_status_, self.stop_reason_ = status, "selection_failure"
                 self.fit_seconds_ = time.perf_counter() - started
                 _two_stage_diagnostics(self)
-                raise SelectionError("The globally selected subset contains only one class")
+                raise SelectionError(message, status=status)
             _check_deadline(deadline)
         except _Deadline as exc:
             self.model_status_, self.stop_reason_ = "kernel_stage_unrun", "time_cap"

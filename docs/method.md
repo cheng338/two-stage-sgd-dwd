@@ -13,11 +13,14 @@ one observation uniformly with replacement at each update, compute
 q = L'(y_i (x_i^T w + b)) y_i using the old state, and update
 w = projection(w - eta q x_i), b = b - eta q. Only the slope is projected.
 
-The selected rows are the ceil(retention_fraction * N) globally smallest
+The selected rows are the floor(retention_fraction * N) globally smallest
 absolute linear scores. Independent random keys break score ties, then unique
 original IDs break any key ties. There are no label or predicted-side quotas.
 Selection is a heuristic; these are not DWD support vectors. Duplicate indices
-are impossible. Selection with only one label raises a recorded failure.
+are impossible. The count is rounded down without imposing a minimum count or
+adding rows to supply both classes. An empty selection raises `SelectionError`
+with status `empty_selection`; a nonempty selection with only one label raises
+the same exception with status `single_class_selection`.
 The default `retention_fraction=0.3` matches the ensemble package's 30% starting
 value. The original Chapter 3 guide's 5% remains an explicit API setting,
 outside the recommended grid; changing the default does not establish its
@@ -188,7 +191,7 @@ one finite update returns a zero diagnostic model marked `untrained_fallback`.
 It must not be ranked as a trained model. A time-capped trained model without
 validation may be evaluated later but is ineligible for the guide's calibration.
 
-Two-stage failures additionally include `single_class_selection`,
+Two-stage failures additionally include `empty_selection`, `single_class_selection`,
 `linear_stage_failure`, and `kernel_stage_unrun`. An untrained or numerically
 failed linear stage cannot generate a misleading random subset. A failed
 kernel stage does not erase a valid linear baseline. Prediction is blocked

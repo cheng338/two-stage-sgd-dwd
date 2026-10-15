@@ -51,7 +51,6 @@ def check(flavor, junit=None):
     tags = [line[5:] for line in wheel_path.read_text(encoding="utf-8").splitlines()
             if line.startswith("Tag: ")]
     expected_tag = ("py3-none-any" if flavor == "portable" else
-                    "cp310-cp310-win_amd64" if sys.version_info[:2] == (3, 10) else
                     "cp311-abi3-win_amd64")
     require(tags == [expected_tag], f"Unexpected installed wheel tags: {tags}")
     package = importlib.import_module(PACKAGE)

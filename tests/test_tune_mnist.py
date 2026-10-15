@@ -466,7 +466,7 @@ def test_evaluator_identity_disagreement_is_not_committed(tmp_path):
 
 def test_exact_adjacent_candidates_survive_interruption_and_resume(tmp_path):
     adjacent = math.nextafter(1., math.inf)
-    fractions = [.3, math.nextafter(.3, math.inf)]
+    fractions = [math.nextafter(.3, 0.), .3]
     custom = {'kernel': ['rbf'], 'lambd': [1., adjacent], 'gamma': [1., adjacent],
               'retention_fraction': fractions}
     args, fake = arguments(tmp_path, max_candidates=8), Scores()
@@ -491,7 +491,7 @@ def test_exact_adjacent_candidates_survive_interruption_and_resume(tmp_path):
         with pytest.raises(RuntimeError, match='adjacent candidate'):
             _RUNNER.run_search(args, param_grid=custom)
         saved = records(args.output_dir)
-        assert len(saved) == 1 and saved[0]['params']['retention_fraction'] == .3
+        assert len(saved) == 1 and saved[0]['params']['retention_fraction'] == fractions[0]
         args.resume = True
         result = _RUNNER.run_search(args, param_grid=custom)
         final = records(args.output_dir)
@@ -504,7 +504,7 @@ def test_exact_adjacent_candidates_survive_interruption_and_resume(tmp_path):
                     r['params']['retention_fraction']) for r in final}
     assert coordinates == {(l, g, f) for l in (1., adjacent) for g in (1., adjacent)
                            for f in fractions}
-    assert all(r['n_retained_on_ten_rows'] == (3 if r['params']['retention_fraction'] == .3 else 4)
+    assert all(r['n_retained_on_ten_rows'] == (3 if r['params']['retention_fraction'] == .3 else 2)
                for r in final)
     assert result['attempted_candidates'] == 8
     assert read(args.output_dir / 'config.json')['grid'] == custom

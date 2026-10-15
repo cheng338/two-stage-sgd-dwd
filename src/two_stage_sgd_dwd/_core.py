@@ -308,13 +308,14 @@ def select_near_boundary(
     rng: np.random.Generator,
     observation_ids: ArrayLike | None = None,
 ) -> NDArray[np.intp]:
-    """Select ``ceil(fraction * n)`` distinct rows by global absolute score.
+    """Select ``floor(fraction * n)`` distinct rows by global absolute score.
 
     Return rows in rank order. Labels and score signs do not define quotas.
     Independent random keys break score ties, then observation IDs break key
     ties. Callers should provide unique IDs for deterministic final tie breaks.
-    Empty scores yield empty indices; class and fit-size checks belong to the
-    estimator because this operation does not inspect labels.
+    Empty scores or a count rounded to zero yield empty indices; class and
+    fit-size checks belong to the estimator because this operation does not
+    inspect labels.
     """
     values = _finite_array(scores, "scores", ndim=1)
     retained_fraction = _finite_scalar(fraction, "fraction")
@@ -337,7 +338,7 @@ def select_near_boundary(
                 raise ValueError("observation_ids must be unique")
         except TypeError as exc:
             raise ValueError("observation_ids must have mutually comparable values") from exc
-    count = math.ceil(retained_fraction * values.size)
+    count = math.floor(retained_fraction * values.size)
     keys = rng.random(values.size)
     try:
         order = np.lexsort((ids, keys, np.abs(values)))

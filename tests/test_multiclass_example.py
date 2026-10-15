@@ -117,7 +117,7 @@ def test_ovo_matches_manual_binary_fits_and_maps_pair_diagnostics(
             query = X[[0, 9, 21, 35]] + np.array([0.03, -0.02])
             assert_array_equal(fitted.decision_function(query), manual.decision_function(query))
             assert_array_equal(fitted.predict(query), manual.predict(query))
-            assert fitted.n_retained_ == int(np.ceil(retention * len(pair_y)))
+            assert fitted.n_retained_ == int(np.floor(retention * len(pair_y)))
             assert np.all(fitted.selected_class_counts_ > 0)
 
             assert report["classes"] == (first, second)
@@ -170,7 +170,10 @@ def test_report_mutation_cannot_change_fitted_pair_diagnostics():
 
 
 @pytest.mark.parametrize("backend", ["python", "auto"])
-def test_one_selected_observation_propagates_failure_without_retry(backend):
+@pytest.mark.parametrize("fraction,count,status", [
+    (.001, 0, "empty_selection"), (.025, 1, "single_class_selection"),
+])
+def test_insufficient_selection_propagates_failure_without_retry(backend, fraction, count, status):
     X, y = multiclass_problem(3, "strings")
     attempts = []
     original_fit = TwoStageDWDClassifier.fit
@@ -180,22 +183,24 @@ def test_one_selected_observation_propagates_failure_without_retry(backend):
         return original_fit(estimator, pair_X, pair_y, **kwargs)
 
     model = OneVsOneClassifier(
-        binary_prototype(retention_fraction=0.001, optimizer_backend=backend),
+        binary_prototype(retention_fraction=fraction, optimizer_backend=backend),
         n_jobs=1,
     )
     with threadpool_limits(limits=1), patch.object(
         TwoStageDWDClassifier, "fit", recorded_fit
-    ), pytest.raises(SelectionError, match="only one class"):
+    ), pytest.raises(SelectionError) as caught:
         model.fit(X, y)
+    assert caught.value.status == status
     assert len(attempts) == 1
     failed, pair_X, pair_y = attempts[0]
     first, second = np.unique(y)[:2]
     mask = (y == first) | (y == second)
     assert_array_equal(pair_X, X[mask])
     assert_array_equal(pair_y, (y[mask] == second).astype(int))
-    assert failed.n_retained_ == 1
-    assert failed.selected_class_counts_.sum() == 1
-    assert failed.model_status_ == "single_class_selection"
+    assert failed.n_retained_ == count
+    assert failed.selected_class_counts_.sum() == count
+    assert failed.model_status_ == status
+    assert failed.stop_reason_ == "selection_failure"
     assert not failed.cv_eligible_
     assert not hasattr(failed, "kernel_estimator_")
 

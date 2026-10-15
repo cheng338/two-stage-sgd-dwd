@@ -29,11 +29,12 @@ import two_stage_sgd_dwd
 from two_stage_sgd_dwd import mnist_param_grid
 from two_stage_sgd_dwd.datasets import load_mnist_pair
 from _adaptive_grid import (AdaptiveSearchConfig, candidate_key, next_search_stage,
-                            ordered_eligible, POLICY_STATE_SCHEMA_VERSION)
+                            ordered_eligible, POLICY_STATE_SCHEMA_VERSION,
+                            fold_accuracy, record_score, score_token)
 from _mnist_cv import FoldEvaluator, execution_identity
 
 
-_CONFIG_SCHEMA_VERSION = 8
+_CONFIG_SCHEMA_VERSION = 9
 _PLAN_SCHEMA_VERSION = 3
 _RECEIPT_SCHEMA_VERSION = 1
 _FOLD_SCHEMA_VERSION = 1
@@ -142,6 +143,7 @@ def _validate_records(records, *, expected_folds, execution_identity,
                         or not 0 <= score <= 1):
                     raise ValueError(prefix + 'invalid eligible fold accuracy or status')
                 scores.append(float(score))
+                fold_accuracy(fold)
             elif (score is not None or not isinstance(fold['status'], str)
                   or not fold['status'] or fold['status'] == 'trained'):
                 raise ValueError(prefix + 'invalid failed fold accuracy or status')
@@ -151,11 +153,16 @@ def _validate_records(records, *, expected_folds, execution_identity,
             raise ValueError(prefix + 'candidate eligibility disagrees with folds')
         mean = record['mean_score']
         if record['eligible']:
+            # Validate complete integer evidence before accepting or replaying
+            # this receipt; keep scalar-only custom evaluators supported.
+            canonical_score = record_score(record)
             if (isinstance(mean, bool) or not isinstance(mean, numbers.Real)
                     or not math.isfinite(mean) or not 0 <= mean <= 1
                     or not math.isclose(float(mean), math.fsum(scores) / expected_folds,
                                         rel_tol=1e-12, abs_tol=1e-12)):
                 raise ValueError(prefix + 'mean score disagrees with eligible folds')
+            if not math.isclose(float(mean), float(canonical_score), rel_tol=1e-12, abs_tol=1e-12):
+                raise ValueError(prefix + 'mean score disagrees with accuracy counts')
         elif mean is not None:
             raise ValueError(prefix + 'failed candidates must have a null mean score')
     _runtime_history(records, execution_identity, threads=threads)
@@ -386,7 +393,8 @@ def _validate_fold_prefix(folds, expected_folds):
                     or not isinstance(score, numbers.Real) or not math.isfinite(score)
                     or not 0 <= score <= 1):
                 raise ValueError('Invalid saved eligible fold')
-        elif fold.get('status') != 'single_class_selection' or score is not None:
+            fold_accuracy(fold)
+        elif fold.get('status') not in ('empty_selection', 'single_class_selection') or score is not None:
             raise ValueError('Invalid saved failed fold')
     _content_sha256(folds)  # Reject nonfinite or non-JSON auxiliary evidence too.
 
@@ -675,14 +683,18 @@ def _load_qualified_selection_locked(directory, *, allow_blas_change=False):
                            run_sha256=_run_sha256(config, _read_json(directory / 'splits.json')),
                            recover=False, allow_blas_change=allow_blas_change,
                            current_execution_identity=current_identity, threads=config['threads'])
-    if not ordered_eligible(records, expected_folds=config['folds']):
+    ranked = ordered_eligible(records, expected_folds=config['folds'])
+    if not ranked:
         raise ValueError('Qualified selection requires eligible candidate evidence')
     selection = _read_json(directory / 'selection.json')
     if (selection.get('state') != 'accepted' or selection['review_reasons']
             or not selection.get('eligible_candidates')
             or not isinstance(selection.get('mean_cv_accuracy'), (int, float))
             or not np.isfinite(selection['mean_cv_accuracy'])
-            or selection['params'] != locked['params']):
+            or selection['params'] != locked['params']
+            or selection['params'] != ranked[0]['params']
+            or selection['mean_cv_accuracy'] != float(record_score(ranked[0]))
+            or selection.get('cv_score') != score_token(record_score(ranked[0]))):
         raise ValueError('Qualified selection disagrees with the saved review')
     for name in ('epochs', 'sampling', 'batch_size', 'stopping', 'random_state',
                  'preprocessing', 'package_version', 'optimizer_backend',
@@ -760,6 +772,7 @@ def _run_search(args, *, param_grid):
         'threads': args.threads, 'data_hashes': data.hashes,
         'official_test_partition_loaded': False,
         'selection_metric': 'mean_fold_accuracy',
+        'accuracy_comparison': 'exact_equal_weight_fold_fractions_when_counts_available',
         'tie_break': ['smaller_retention_fraction', 'larger_lambd', 'smaller_gamma'],
         'retention_scope': 'fixed choices in the supplied grid; no continuous retention optimum claimed',
         'coarse_candidates': len(coarse), 'grid': grid,
@@ -848,7 +861,7 @@ def _run_search(args, *, param_grid):
             if not stage['completed'] and all(candidate_key(p) in attempted for p in stage['candidates']):
                 stage['completed'] = True
                 ranked = ordered_eligible(records, expected_folds=args.folds)
-                stage['score_after'] = ranked[0]['mean_score'] if ranked else None
+                stage['score_after'] = float(record_score(ranked[0])) if ranked else None
         write_json(out / 'stages.json', stages)
         evaluator = FoldEvaluator(X, y, ids, folds, max_epochs=args.epochs,
                                   random_state=args.random_state, batch_size=1,
@@ -895,7 +908,7 @@ def _run_search(args, *, param_grid):
             if existing is None:
                 prior = rank()
                 existing = {'name': name, 'candidates': proposals, 'completed': False,
-                            'score_before': prior[0]['mean_score'] if prior else None}
+                            'score_before': float(record_score(prior[0])) if prior else None}
                 stages.append(existing)
                 write_json(out / 'stages.json', stages)
             elif not set(candidate_key(p) for p in proposals).issubset(
@@ -927,7 +940,7 @@ def _run_search(args, *, param_grid):
                 progress.complete(record)
                 ranked = rank()
                 status = {'state': 'running', 'stage': name, 'completed_candidates': len(records),
-                          'best_mean_accuracy': ranked[0]['mean_score'] if ranked else None,
+                          'best_mean_accuracy': float(record_score(ranked[0])) if ranked else None,
                           'final_evaluation_eligible': False, 'final_refit_performed': False,
                           'held_out_scored': False, 'official_test_partition_loaded': False}
                 write_json(out / 'status.json', status)
@@ -935,7 +948,7 @@ def _run_search(args, *, param_grid):
                     print(json.dumps(status), flush=True)
             existing['completed'] = True
             ranked = rank()
-            existing['score_after'] = ranked[0]['mean_score'] if ranked else None
+            existing['score_after'] = float(record_score(ranked[0])) if ranked else None
             write_json(out / 'stages.json', stages)
 
         if not control_path.exists():
@@ -962,7 +975,8 @@ def _run_search(args, *, param_grid):
         selection = {
             **runtime_summary,
             'state': review['state'], 'params': ranked[0]['params'] if ranked else None,
-            'mean_cv_accuracy': ranked[0]['mean_score'] if ranked else None,
+            'mean_cv_accuracy': float(record_score(ranked[0])) if ranked else None,
+            'cv_score': score_token(record_score(ranked[0])) if ranked else None,
             'eligible_candidates': len(ranked), 'attempted_candidates': len(records),
             'review_reasons': review['reasons'], 'stopping_reason': review['stopping_reason'],
             'winner_bracket': state.get('winner_bracket'),

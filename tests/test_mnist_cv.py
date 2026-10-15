@@ -48,7 +48,7 @@ def test_cached_evaluation_matches_public_pipeline_bitwise_for_retention_and_wid
         return model
 
     monkeypatch.setattr(mnist_cv, "KernelSGDDWD", capture_kernel)
-    for fraction in (0.75, 1.0):
+    for fraction in (0.7, 0.75, 1.0):
         params = {"lambd": lambd, "gamma": gamma, "retention_fraction": fraction}
         captured.clear()
         record = evaluator.evaluate(params)
@@ -67,6 +67,8 @@ def test_cached_evaluation_matches_public_pipeline_bitwise_for_retention_and_wid
             assert_array_equal(actual.decision_function(X[validation]), direct.decision_function(X[validation]))
             assert_array_equal(actual.predict(X[validation]), direct.predict(X[validation]))
             fold_record = record["folds"][fold_index]
+            assert fold_record["n_retained"] == int(np.floor(fraction * len(train)))
+            assert direct.n_retained_ == fold_record["n_retained"]
             assert fold_record["seed"] == seed
             assert fold_record["stage_seeds"] == direct.stage_seeds_
             assert fold_record["gamma_resolved"] == direct.gamma_
@@ -117,15 +119,19 @@ def test_linear_fits_are_reused_across_all_kernel_candidates_and_refresh_with_co
     assert len(evaluator._linear_cache) == len(folds)
 
 
-def test_selection_failure_is_recorded_but_numerical_failure_propagates(monkeypatch):
+@pytest.mark.parametrize("fraction,count,status", [
+    (.01, 0, "empty_selection"), (.07, 1, "single_class_selection"),
+])
+def test_selection_failure_is_recorded_but_numerical_failure_propagates(monkeypatch, fraction, count, status):
     X, y, ids, folds = small_data()
     evaluator = mnist_cv.FoldEvaluator(X, y, ids, folds, max_epochs=2)
-    record = evaluator.evaluate({"lambd": 1e-6, "gamma": 0.2, "retention_fraction": 0.01})
+    with patch.object(KernelSGDDWD, "fit", side_effect=AssertionError("kernel fit")):
+        record = evaluator.evaluate({"lambd": 1e-6, "gamma": 0.2, "retention_fraction": fraction})
     assert not record["eligible"]
     assert record["mean_score"] is None
     assert len(record["folds"]) == len(folds)
-    assert all(fold["status"] == "single_class_selection" for fold in record["folds"])
-    assert all(fold["n_retained"] == 1 and fold["kernel_updates"] == 0 for fold in record["folds"])
+    assert all(fold["status"] == status for fold in record["folds"])
+    assert all(fold["n_retained"] == count and fold["kernel_updates"] == 0 for fold in record["folds"])
     json.dumps(record, allow_nan=False)
 
     def failed_fit(*args, **kwargs):

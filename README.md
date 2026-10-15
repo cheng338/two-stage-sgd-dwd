@@ -28,7 +28,7 @@ accompanying his dissertation. The two-stage method follows Chapter 3,
 
 # Installation
 
-Python 3.10 or newer is required. From this source directory:
+Python 3.11 or newer is required. From this source directory:
 
 ```console
 python -m pip install .
@@ -47,18 +47,24 @@ environment variable `SGD_BUILD_ACCEL=0` requests a portable Python-only build.
 The Python backend remains the default in either distribution. Native binary
 availability depends on the operating system and architecture; see
 [backend and cache details](docs/optimizer-backends.md).
-Native builds on CPython 3.10 use its version-specific ABI. Builds on CPython
-3.11 and newer retain the Python 3.11 stable ABI (`cp311-abi3`). A Python 3.11
-stable-ABI wheel cannot be installed on Python 3.10; that interpreter needs a
-matching native build or the portable distribution.
+Native builds use the Python 3.11 stable ABI (`cp311-abi3`) for standard
+CPython 3.11 and newer. Portable wheels use `py3-none-any` and have the same
+Python 3.11 minimum. Python 3.10 and free-threaded CPython builds are not
+supported. The SGD implementation is shared across supported Python versions.
 
 The repository's Windows CI workflow builds and installs native and portable wheels on
-Python 3.10 with NumPy 1 and Python 3.12 with NumPy 2. It checks installed
+Python 3.11 with NumPy 1 and Python 3.12 with NumPy 2. It checks installed
 package and extension locations, version agreement, and actual backend use
 before running the full suite from a separate test bundle without `src`.
 Native jobs require compiled fits; portable jobs require an absent extension
 and working automatic Python fallback. Each job saves its wheel, dependency
 versions, installed-package check, and test report.
+
+Among currently supported versions, direct runtime validation to date uses
+Python 3.12. Compatibility with standard CPython 3.11 and 3.13 follows the build
+configuration and stable-ABI contract; those interpreter versions have not yet
+been directly validated locally. CI configuration alone does not establish a
+successful hosted run.
 
 # Example
 
@@ -98,6 +104,11 @@ means `mean_loss + lambd * ||h||^2`, as in `dwd`. Python reserves the word `lamb
 so the argument is spelled `lambd`. Its default is **1e-6**, matching the
 ensemble package's starting value. The fitted value is `lambd_`.
 The retention default is **0.3 (30%)**, also matching `ensemble-dwd`.
+The retained count is `floor(retention_fraction * N)`, where `N` is the
+number of training observations. For example, 30% of 101 observations
+retains 30. Ranking remains global by absolute linear score, with the same
+random-key and observation-ID tie breaking. The count is not enlarged to
+supply a minimum number of rows or both classes.
 The original Chapter 3 choice of 5% remains available through an explicit
 `retention_fraction=0.05`, but is excluded from the recommended presets.
 The constrained first-stage `LinearSGDDWD` has no regularization parameter.
@@ -195,6 +206,15 @@ Within-fold caching reuses the first-stage fit and selection ranking; its
 equivalence to ordinary complete fits is checked, and fitted state never
 crosses fold boundaries.
 
+The adaptive example compares the exact equal-weight mean of each fold's
+correct-prediction fraction, using the saved integer counts. Unequal-sized
+folds still receive equal weight; observations are not pooled into a different
+metric. Exact ties prefer smaller retention, then larger `lambd`, then smaller
+`gamma`. Displayed scores are rounded to floating point once. These comparisons
+also govern refinement stability and qualified exports. Checkpoints predating
+this rule require a new output directory. The separate `make_search` helper
+continues to use scikit-learn's standard ranking.
+
 The tuner defaults to `--optimizer-backend python --kernel-cache-bytes 0`.
 To use the optional compiled optimizer and a 64 MiB lazy kernel-column cache
 per kernel fit, add `--optimizer-backend native --kernel-cache-bytes 67108864`
@@ -280,7 +300,8 @@ comparable fit or prediction performance. This mode applies only to searches
 started with the current checkpoint schema; older records are not rewritten.
 
 After each completed fold, the runner atomically saves `fold-progress.json` for
-its one active candidate, including a legitimate one-class selection failure.
+its one active candidate, including legitimate empty or one-class selection
+failures.
 Its content receipt binds the ordered fold prefix to the candidate, stage,
 execution identity, saved run and preceding committed candidate receipt.
 Same-runtime resume reuses that verified prefix and evaluates only the remaining
@@ -428,8 +449,34 @@ models that lack this option continue to use direct prediction, and explicitly
 saved backend choices are preserved. Floating-point scores can differ between
 backends. Cancellation and near-zero-score fallbacks recompute directly; they
 are engineering safeguards, not a universal label-equivalence certificate.
+For roundoff-level scores whose RBF kernels are nearly constant, the BLAS
+backend additionally uses `expm1` and compensated summation to retain small
+kernel variations. This evaluates the same fitted function more accurately;
+it can correct a label extremely close to the decision boundary. The explicit
+direct backend preserves its historical calculation. Training and validation
+checkpoint calculations are unchanged.
 See [prediction details](docs/optimizer-backends.md#rbf-prediction) and the
 AOCL/MKL comparisons in [VALIDATION.md](VALIDATION.md).
+
+For optional diagnostics on an already fitted model:
+
+```python
+from two_stage_sgd_dwd import prediction_profile
+
+with prediction_profile() as records:
+    scores = model.decision_function(X_test)
+print(records)
+```
+
+Records report time spent building RBF kernels, accumulating scores and
+checking numerical safeguards, plus completed blocks and fallback counts.
+They remain outside the model and do not change its fitted state or arithmetic.
+Near-constant-kernel probes and applied score corrections have separate counters.
+Other kernels and zero-width RBF produce no records. Nested scopes collect
+separately; each thread or asynchronous task opens its own scope. A delegated
+direct call has a parent call ID: do not add parent and child total times.
+Profiling is disabled by default and reads no profiling clocks while disabled.
+Enabled timings include instrumentation overhead and are diagnostic measurements.
 
 Sections 3.1 and 3.2 of the October 4 dissertation explicitly permit averaged
 batch updates, including full-gradient updates. The reported Chapter 5 study
@@ -463,7 +510,8 @@ not the original multiclass data. The helper accepts the fitted wrapper itself,
 as shown in the example.
 
 Smaller retention fractions keep the existing global boundary-selection rule:
-single-class selections raise `SelectionError` without redraws or class quotas.
+empty and single-class selections raise `SelectionError` without redraws or
+class quotas.
 If a pair fit fails, the wrapper propagates the error and does not provide a
 public record of the failing clone's diagnostics. Discard that wrapper and
 create a new one before retrying; do not inspect it as a completed fit.
@@ -563,11 +611,19 @@ explicit `validation_data` must already be transformed consistently using only
 the fitted training transformer; sklearn Pipeline does not transform that
 fit argument automatically. Division by 255 itself requires no fitted transformer.
 
-For a very small training set, 5% may retain only one class. The estimator
-reports this selection failure without adding observations or changing the model.
+For a very small training set, rounding down may retain no observations, or
+the selected observations may contain only one class. These cases raise
+`SelectionError` with status `empty_selection` or `single_class_selection`,
+respectively, without adding observations or changing the selection rule.
 A `SelectionError` preserves `linear_estimator_`, `selected_indices_`,
 `selected_ids_`, and class-count diagnostics; the two-stage predictor remains
 unfitted. The selected linear model remains available as a baseline.
+
+Earlier versions rounded the retained count upward. New fits can therefore
+use one fewer observation when the product is noninteger, changing fitted
+coefficients, predictions and timings. Existing saved models and study records
+are unchanged; no accuracy or speed advantage is implied. Adaptive searches
+created with the earlier implementation require a fresh output directory.
 
 # Fitting budgets and stopping
 
@@ -665,4 +721,8 @@ and [BibTeX format](docs/references.bib). Input filenames and checksums are
 recorded in [the source provenance record](docs/provenance.json).
 
 Releases are available on [GitHub](https://github.com/cheng338/two-stage-sgd-dwd/releases).
+Routine fixes and improvements are grouped into patch releases; substantial
+new capabilities use a minor release. Development changes accumulate under
+`Unreleased` without a version bump for each change. See the
+[release policy](docs/release-policy.md).
 Licensing has not been decided.

@@ -26,6 +26,7 @@ from _runtime_identity import runtime_identity
 from two_stage_sgd_dwd import KernelSGDDWD, LinearSGDDWD, SelectionError, TrainingError
 from two_stage_sgd_dwd import __version__ as _PACKAGE_VERSION
 from two_stage_sgd_dwd._core import _mean_finite_losses, dwd_loss, select_near_boundary
+from _adaptive_grid import fold_accuracy, record_score
 from two_stage_sgd_dwd._estimators import _generator
 from two_stage_sgd_dwd._kernels import resolve_kernel
 
@@ -334,7 +335,9 @@ class FoldEvaluator:
                         or not isinstance(accuracy, numbers.Real) or not np.isfinite(accuracy)
                         or not 0 <= accuracy <= 1):
                     raise ValueError("Invalid completed eligible fold")
-            elif record.get("status") != "single_class_selection" or record.get("accuracy") is not None:
+                fold_accuracy(record, require_counts=True)
+            elif (record.get("status") not in ("empty_selection", "single_class_selection")
+                  or record.get("accuracy") is not None):
                 raise ValueError("Invalid completed selection failure")
         return records
 
@@ -379,6 +382,9 @@ class FoldEvaluator:
                 counts = [int(np.sum(self._y[selected_rows] == label)) for label in self._classes]
                 record.update(n_retained=len(selected), selected_class_counts=counts,
                               selected_ids_sha256=_ids_hash(self._ids[selected_rows]))
+                if len(selected) == 0:
+                    raise SelectionError("The retention fraction selects no observations",
+                                         status="empty_selection")
                 if min(counts) == 0:
                     raise SelectionError("The globally selected subset contains only one class")
             except SelectionError as exc:
@@ -415,5 +421,5 @@ class FoldEvaluator:
         # published. No runtime check occurs inside an optimizer update.
         self._check_execution_identity()
         return {"params": params, "eligible": eligible,
-                "mean_score": float(np.mean([record["accuracy"] for record in records])) if eligible else None,
+                "mean_score": float(record_score({'folds': records})) if eligible else None,
                 "folds": records, "execution_identity": deepcopy(self.execution_identity_)}

@@ -1,4 +1,4 @@
-"""Native build contracts distinguish CPython 3.10 from the 3.11 stable ABI."""
+"""Build configuration checks; simulated versions are not runtime validation."""
 from collections import namedtuple
 from contextlib import contextmanager
 import os
@@ -29,7 +29,7 @@ def configuration(minor, portable=False):
         yield namespace, setup.call_args.kwargs
 
 
-@pytest.mark.parametrize('minor', [10, 11, 12])
+@pytest.mark.parametrize('minor', [11, 12, 13])
 @pytest.mark.parametrize('portable', [False, True])
 def test_build_selects_correct_abi_and_keeps_portable_variant(minor, portable):
     with configuration(minor, portable) as (_, settings):
@@ -40,20 +40,13 @@ def test_build_selects_correct_abi_and_keeps_portable_variant(minor, portable):
         extension, = settings['ext_modules']
         assert extension.name == 'two_stage_sgd_dwd._sgd_accel'
         assert extension.optional
-        if minor == 10:
-            assert not extension.py_limited_api
-            assert extension.define_macros == []
-            assert settings['options'] == {}
-        else:
-            assert extension.py_limited_api
-            assert extension.define_macros == [('Py_LIMITED_API', '0x030B0000')]
-            assert settings['options'] == {'bdist_wheel': {'py_limited_api': 'cp311'}}
+        assert extension.py_limited_api
+        assert extension.define_macros == [('Py_LIMITED_API', '0x030B0000')]
+        assert settings['options'] == {'bdist_wheel': {'py_limited_api': 'cp311'}}
 
 
-@pytest.mark.parametrize('minor,library,limited', [
-    (10, 'python310.lib', False), (11, 'python3.lib', True), (12, 'python3.lib', True),
-])
-def test_windows_zig_linker_matches_the_selected_abi(tmp_path, minor, library, limited):
+@pytest.mark.parametrize('minor', [11, 12, 13])
+def test_windows_zig_linker_matches_the_selected_abi(tmp_path, minor):
     target = tmp_path / '_sgd_accel.pyd'
     with configuration(minor) as (namespace, settings):
         extension, = settings['ext_modules']
@@ -70,8 +63,8 @@ def test_windows_zig_linker_matches_the_selected_abi(tmp_path, minor, library, l
         arguments, = run.call_args.args
         assert run.call_args.kwargs == {'check': True}
         assert arguments[0:2] == ['compiler-under-test', 'cc']
-        assert str(Path(sys.base_prefix) / 'libs' / library) in arguments
-        assert ('-DPy_LIMITED_API=0x030B0000' in arguments) == limited
+        assert str(Path(sys.base_prefix) / 'libs' / 'python3.lib') in arguments
+        assert '-DPy_LIMITED_API=0x030B0000' in arguments
         assert all(flag in arguments for flag in ('-ffp-contract=off', '-fno-fast-math',
                                                   '-fno-associative-math', '-march=x86_64'))
         assert not target.exists()

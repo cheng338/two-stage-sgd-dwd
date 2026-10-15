@@ -314,7 +314,7 @@ def test_previous_schema_requires_fresh_output_without_modifying_evidence(tmp_pa
     with started(tmp_path, completed=route == 'qualified') as (args, fake):
         path = args.output_dir / 'config.json'
         config = read(path)
-        assert config['schema_version'] == 8
+        assert config['schema_version'] == 9
         config['schema_version'] = 7
         path.write_text(json.dumps(config), encoding='utf-8')
         if route == 'qualified':

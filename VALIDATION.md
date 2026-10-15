@@ -1,15 +1,146 @@
-# Python 3.10 build compatibility
+# Current Python support
+
+The current development version requires Python 3.11 or newer. Native builds
+use the Python 3.11 stable ABI (`cp311-abi3`) for standard CPython; portable
+`py3-none-any` wheels have the same Python minimum. Python 3.10 and free-threaded
+CPython builds are not supported. Removing the Python 3.10 packaging path does
+not change the SGD implementation or numerical code.
+
+Python 3.12 has direct runtime validation. Standard CPython 3.11 and 3.13
+compatibility follows the build configuration and stable-ABI contract, without
+direct local runtime checks on those versions to date. The Windows workflow
+now targets Python 3.11 with NumPy 1 and Python 3.12 with NumPy 2 for both native
+and portable installed wheels; a configured workflow is not a hosted-run result.
+
+The Python 3.10 results below are historical evidence collected before support
+was removed. They do not describe current installation requirements.
+
+After changing the minimum on October 15, nine build-configuration checks
+passed, including simulated 3.11, 3.12 and 3.13 version selection. Fresh native
+and portable wheels built on Windows/Python 3.12 with the expected tags and
+`Requires-Python: >=3.11`. Each extracted wheel passed tiny linear, kernel and
+two-stage fit/predict checks with its expected backend. Pip rejected both
+wheels when targeting Python 3.10. Hashes confirmed that all package source
+files and the existing optimizer binary were unchanged by this packaging edit.
+These small checks used one numerical thread; no numerical study was rerun.
+
+# Current retention-count convention
+
+The current development version uses `floor(retention_fraction * N)` for
+two-stage selection. Global ranking and tie breaking are unchanged; the
+implementation does not enlarge an empty or one-class selection. These cases
+raise `SelectionError` with status `empty_selection` or
+`single_class_selection`, respectively. This approved change can alter new
+fits whenever the retained-count product is noninteger. It does not promise
+equal predictions, improved accuracy or faster execution. Previous saved
+models and experiment records are unchanged.
+
+For this change, the complete AOCL/Python 3.12 source suite passed **1,351
+tests and 9,641 subtests**, retaining the existing invalid-label cast warning.
+Coverage includes integer and adjacent-float count boundaries, empty and
+one-class selection, multiclass failure propagation, cached/direct CV parity,
+and recovery of a completed empty-selection fold. An independent comparison
+with the immediately preceding source checked 528 selections: each new
+selection is the floor-length prefix of the previous ranking, with unchanged
+tie-key RNG state and input arrays. Thirty-six small fits with integral
+retained counts had bitwise-identical scores, labels and selected rows across
+linear, RBF and polynomial kernels, single/batch/full updates, and Python or
+automatic optimizer selection. The native optimizer binary is unchanged.
+These correctness checks used one numerical thread; no numerical study was
+rerun. They do not assert result equivalence when the retained count changes.
+
+The validation results below predate this count-convention change. Their
+claims that selection and fitting were unchanged apply to the changes tested
+at that time, not to the subsequent downward-rounding change.
+
+# October 15, 2026 prediction and search validation
+
+These preceding updates correct exact-count comparisons and geometric proposals
+in the adaptive example, add external prediction diagnostics, and stabilize a
+narrow near-constant-RBF cancellation case in the BLAS predictor. The SGD
+objective, update equations, sampling, selection, fitting code and native
+optimizer binary are unchanged.
+
+The final AOCL/Python 3.12 source suite passed **1,334 tests and 9,641
+subtests**, retaining one existing invalid-label cast warning. Before the
+Python minimum changed, the rebuilt portable wheel passed **193 targeted tests**
+on Python 3.10, with two native-only skips. OpenBLAS/Python 3.12 passed
+**158 prediction tests**.
+The source suite covers exact ranking and stability, resume/export integrity,
+geometric arithmetic limits, profiler isolation, numerical correction and
+existing estimator behavior. Wheel-source hashes were verified. An initial
+harness omitted the local pytest dependency path from subprocesses; correcting
+that path resolved the harness failures before the final complete run.
+
+All 30 accepted saved SGD models from the October 6 experiment were verified
+against their recorded byte counts and SHA256 hashes before loading. Their
+60,170 test scores were bitwise identical between the preceding predictor,
+the profiler-enabled and disabled predictor, and the guarded numerical update.
+Every original prediction and accuracy was retained. The audit reused the
+saved fits without refitting or tuning; original experiment files were read
+only. Profiling stores no diagnostic state on fitted estimators.
+
+The numerical correction concerns scores extremely close to zero. Independent
+high-precision RBF calculations exposed sign errors in symmetric small fitted
+models where `exp(-gamma * distance_squared)` rounded nearly to one. In 30
+Kernel/TwoStage full-gradient cases, the guarded formula reduced reference sign
+disagreements from 35 to 1; the remaining ordinary-width exact-zero case lies
+outside the guard. In 24 further fitted cases with large coordinate offsets,
+disagreements decreased from 38 to 0. These are diagnostic fixtures, not
+estimates of generalization accuracy. Additional coefficient/intercept stress
+cases and exception-policy checks supplement the fitted cases.
+
+The correction rewrites the same RBF function as the sum of the intercept,
+coefficients, and coefficient-weighted `expm1` residuals, using compensated
+summation. It applies only inside a score-roundoff envelope and when all scaled
+direct squared distances are at most `sqrt(float64 epsilon)`. Explicit direct
+prediction, other kernels, training and checkpoint evaluation retain their
+existing arithmetic. This improves the tested cancellation cases; it does not
+promise exact labels arbitrarily close to every decision boundary.
+
+Sequential, alternating prediction timings used 16 numerical threads for one
+saved model per MNIST pair, with 31 measurements per implementation and model.
+All timing-control score bytes agreed. Final-source median times were:
+
+| Saved model or control | Preceding, ms | Updated, ms |
+| --- | ---: | ---: |
+| MNIST 2 vs 3, repetition 00 | 11.7375 | 10.7263 |
+| MNIST 4 vs 9, repetition 00 | 9.3247 | 9.5157 |
+| MNIST 3 vs 8, repetition 00 | 9.3682 | 9.6073 |
+| Synthetic, 512 queries and 128 centers | 0.3755 | 0.3884 |
+| Tiny, one query and eight centers | 0.0509 | 0.0548 |
+
+The tiny control used one thread and 101 alternating measurements because
+threading overhead would dominate. These checks do not establish a consistent
+speed advantage. Genuine correction costs more: a deliberately cancelling
+66-center, 129-query fixture increased from 0.218 to 3.427 ms while repairing
+64 reference label discrepancies. A nonconstant boundary fixture took
+0.151 versus 0.160 ms with unchanged labels after the conservative prefilter
+eliminated unnecessary distance probes. Those small affected-path measurements
+used one thread and 31 paired trials. Absolute timings varied across sessions;
+paired comparisons are the relevant evidence.
+
+This is a numerical correction with an explicit performance cost. Enabled
+profiling times include instrumentation overhead and must not be reported as
+uninstrumented classifier benchmarks.
+
+The historical evidence and resource settings below describe earlier checks.
+Current correctness fixtures use one numerical thread for small problems;
+the saved-model scoring audit and MNIST timing checks use 16. No former CPU
+partition or RAM cap was reinstated.
+
+# Historical Python 3.10 build compatibility
 
 On October 5, 2026, Windows AMD64 builds were checked with CPython 3.10.12,
 NumPy 2.2.6, SciPy 1.15.3, scikit-learn 1.7.0, joblib 1.5.1 and threadpoolctl
-3.6.0. The native wheel uses the `cp310-cp310-win_amd64` tag and links against
-the Python 3.10 runtime. The portable wheel uses `py3-none-any` and contains no
-compiled extension. Both declare Python 3.10 or newer.
+3.6.0. The native wheel used the `cp310-cp310-win_amd64` tag and linked against
+the Python 3.10 runtime. The portable wheel used `py3-none-any` and contained no
+compiled extension. Both declared Python 3.10 or newer at that time.
 
 The same source was also rebuilt on CPython 3.12.14, retaining the
 `cp311-abi3-win_amd64` native-wheel tag. Both native builds imported successfully
 and enabled the guarded SciPy BLAS adapter. Strict arithmetic compiler flags
-and the optimizer implementation are unchanged. Python 3.10 uses its full C
+and the optimizer implementation were unchanged. Python 3.10 used its full C
 API because the buffer interface used by the optimizer entered the stable ABI
 in Python 3.11; a Python 3.11 stable-ABI binary is not repackaged for Python 3.10.
 These build checks were performed on Windows, without claiming validation of

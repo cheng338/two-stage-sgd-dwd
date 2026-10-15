@@ -8,13 +8,81 @@ is neither extrapolated nor refined.
 
 from collections.abc import Mapping
 from itertools import product
+from fractions import Fraction
 import math
 from numbers import Integral, Real
+import struct
 
 
 _KEYS = ("lambd", "gamma", "retention_fraction")
 _AXES = ("lambd", "gamma")
-POLICY_STATE_SCHEMA_VERSION = 2
+POLICY_STATE_SCHEMA_VERSION = 3
+
+
+def fold_accuracy(fold, *, require_counts=False):
+    """Validate an accuracy receipt, using exact counts when supplied.
+
+    Scalar-only synthetic/custom scores remain supported. Counts are never
+    inferred from a rounded score, and a partial count receipt is invalid.
+    """
+    score = fold.get('accuracy')
+    if (isinstance(score, bool) or not isinstance(score, Real)
+            or not math.isfinite(score) or not 0 <= score <= 1):
+        raise ValueError('Invalid fold accuracy')
+    has_counts = 'n_correct' in fold or 'n_validation' in fold
+    if not has_counts and not require_counts:
+        return float(score)
+    correct, size = fold.get('n_correct'), fold.get('n_validation')
+    if (any(isinstance(value, bool) or not isinstance(value, Integral)
+            for value in (correct, size)) or size <= 0 or not 0 <= correct <= size):
+        raise ValueError('Invalid fold accuracy counts')
+    value = Fraction(int(correct), int(size))
+    if float(score) != float(value):
+        raise ValueError('Fold accuracy disagrees with its counts')
+    return value
+
+
+def record_score(record):
+    """Exact equal-weight mean of fold accuracies, or the custom scalar score."""
+    folds = record.get('folds')
+    if not folds:
+        return float(record['mean_score'])
+    scores = [fold_accuracy(fold) for fold in folds]
+    exact = [isinstance(score, Fraction) for score in scores]
+    if any(exact) and not all(exact):
+        raise ValueError('Accuracy counts must be supplied for every eligible fold')
+    if all(exact):
+        return sum(scores, Fraction()) / len(scores)
+    return float(record['mean_score'])
+
+
+def score_token(value):
+    """JSON-safe score identity for resumed policy comparisons."""
+    if value is None:
+        return None
+    if isinstance(value, Fraction):
+        return {'numerator': value.numerator, 'denominator': value.denominator}
+    return {'score': float(value)}
+
+
+def _score_from_token(token):
+    if token is None:
+        return None
+    if set(token) == {'score'}:
+        return float(token['score'])
+    return Fraction(token['numerator'], token['denominator'])
+
+
+def _improved(after, before, tolerance):
+    if isinstance(after, Fraction) and isinstance(before, Fraction):
+        return after - before > Fraction(float(tolerance))
+    return after > before + tolerance
+
+
+def _tied(first, second, tolerance):
+    if isinstance(first, Fraction) and isinstance(second, Fraction):
+        return abs(first - second) <= Fraction(float(tolerance))
+    return math.isclose(first, second, rel_tol=0.0, abs_tol=tolerance)
 
 
 def _positive(value, name, *, retention=False):
@@ -86,6 +154,10 @@ def _records(records):
             raise ValueError(f"Record {number}: mean_score must be a float") from error
         if eligible and not math.isfinite(score):
             raise ValueError(f"Record {number}: an eligible mean_score must be finite")
+        if eligible and record.get('folds'):
+            if not valid_record(record):
+                raise ValueError(f'Record {number}: invalid fold evidence')
+            score = record_score(record)
         parsed.append((values, tuple(_token(value) for value in values), score, eligible))
     if not any(entry[3] for entry in parsed):
         raise ValueError("No eligible finite candidate is available")
@@ -116,7 +188,7 @@ def _tolerance(tie_tol):
 def _boundaries(parsed, coordinates, tie_tol):
     best = max(row[2] for row in parsed if row[3])
     tied = [row for row in parsed if row[3]
-            and math.isclose(row[2], best, rel_tol=0.0, abs_tol=tie_tol)]
+            and _tied(row[2], best, tie_tol)]
     result = {}
     for index, axis in enumerate(_AXES):
         reached = {row[1][index] for row in tied}
@@ -167,7 +239,10 @@ def _outward(values, side, axis):
     outward = proposed < endpoint if side == "lower" else proposed > endpoint
     if (not math.isfinite(proposed) or proposed <= 0.0 or not outward
             or _token(proposed) in {_token(value) for value in values}):
-        raise ValueError(f"Cannot represent a distinct positive finite {axis} {side} expansion")
+        try:
+            return _rounded_geometric_extension(values, 'low' if side == 'lower' else 'high')
+        except ValueError as error:
+            raise ValueError(f"Cannot represent a distinct positive finite {axis} {side} expansion") from error
     return proposed
 
 
@@ -220,12 +295,8 @@ def _local_midpoints(values, key):
         if not 0 <= adjacent < len(values):
             continue
         lower, upper = sorted((center, values[adjacent]))
-        # Unlike sqrt(lower * upper), this does not overflow their product or
-        # underflow it before taking the square root.
-        midpoint = math.sqrt(lower) * math.sqrt(upper)
-        if not math.isfinite(midpoint) or midpoint <= 0.0:
-            raise ValueError("Cannot represent a positive finite geometric midpoint")
-        if lower < midpoint < upper and _token(midpoint) not in {_token(lower), _token(upper)}:
+        midpoint = _midpoint(lower, upper)
+        if midpoint is not None:
             local.append(midpoint)
     return _unique(local)
 
@@ -368,14 +439,19 @@ def valid_record(record, *, expected_folds=None):
         if (any(isinstance(index, bool) or not isinstance(index, Integral) for index in indices)
                 or sorted(indices) != list(range(len(folds)))):
             return False
-    mean = math.fsum(float(fold['accuracy']) for fold in folds) / len(folds)
+    try:
+        score = record_score(record)
+    except (TypeError, ValueError):
+        return False
+    mean = (float(score) if isinstance(score, Fraction)
+            else math.fsum(float(fold['accuracy']) for fold in folds) / len(folds))
     return math.isclose(float(record['mean_score']), mean, rel_tol=1e-12, abs_tol=1e-12)
 
 
 def ordered_eligible(records, *, expected_folds=None):
     """Rank valid records by accuracy, retention, stronger lambd, then gamma."""
     return sorted((record for record in records if valid_record(record, expected_folds=expected_folds)),
-                  key=lambda record: (-float(record['mean_score']),
+                  key=lambda record: (-record_score(record),
                       float(record['params']['retention_fraction']),
                       -float(record['params']['lambd']), float(record['params']['gamma'])))
 
@@ -426,7 +502,9 @@ def _policy_results(entries, config):
         score = float(record['mean_score']) if _finite_score(record['mean_score']) else None
         folds = record.get('folds')
         evidence = None if folds is None else [
-            {name: (float(fold[name]) if _finite_score(fold.get(name)) else fold.get(name))
+            {name: (int(fold[name]) if isinstance(fold.get(name), Integral)
+                    and not isinstance(fold.get(name), bool)
+                    else float(fold[name]) if _finite_score(fold.get(name)) else fold.get(name))
              for name in ('fold', 'eligible', 'status', 'accuracy', 'n_validation', 'n_correct')}
             if isinstance(fold, Mapping) else None for fold in folds]
         # Nonfinite scores have one JSON-safe representation; invalid evidence
@@ -435,10 +513,12 @@ def _policy_results(entries, config):
             for fold in evidence:
                 if fold is not None and not _finite_score(fold.get('accuracy')):
                     fold['accuracy'] = None
-        rows.append((params, score, valid, evidence))
+        exact = record_score(record) if valid else None
+        rows.append((params, float(exact) if valid else score, valid, evidence, exact))
     return {'params': [row[0] for row in rows],
             'mean_test_score': [row[1] for row in rows],
-            '_valid': [row[2] for row in rows], '_fold_evidence': [row[3] for row in rows]}
+            '_valid': [row[2] for row in rows], '_fold_evidence': [row[3] for row in rows],
+            '_score_values': [row[4] for row in rows]}
 
 
 def fully_valid_candidate_mask(results):
@@ -447,15 +527,35 @@ def fully_valid_candidate_mask(results):
 
 def ranked_valid_indices(results):
     return sorted((index for index, valid in enumerate(results['_valid']) if valid),
-                  key=lambda index: (-results['mean_test_score'][index],
+                  key=lambda index: (-results['_score_values'][index],
                       results['params'][index]['retention_fraction'],
                       -results['params'][index]['lambd'], results['params'][index]['gamma']))
 
 
 def _policy_records(results):
     return {parameter_hash(parameters): (parameters, results['mean_test_score'][index],
-                    results['_valid'][index], results['_fold_evidence'][index])
+                    results['_valid'][index], results['_fold_evidence'][index],
+                    score_token(results['_score_values'][index]))
             for index, parameters in enumerate(results['params'])}
+
+
+def _rounded_geometric_extension(ordered, side):
+    """Round the capped geometric extension once if ordinary arithmetic fails."""
+    edge = Fraction(ordered[0] if side == 'low' else ordered[-1])
+    if len(ordered) == 1:
+        factor = Fraction(10)
+    else:
+        neighbor = Fraction(ordered[1] if side == 'low' else ordered[-2])
+        factor = min(neighbor / edge if side == 'low' else edge / neighbor, Fraction(10))
+    exact = edge / factor if side == 'low' else edge * factor
+    try:
+        value = float(exact)
+    except OverflowError:
+        value = math.inf
+    if (not math.isfinite(value) or value <= 0
+            or not (value < edge if side == 'low' else value > edge)):
+        raise ValueError('Further boundary values are outside representable positive arithmetic.')
+    return value
 
 
 def _outside(values, side):
@@ -476,7 +576,9 @@ def _outside(values, side):
         value = math.inf
     if (not math.isfinite(value) or value <= 0 or _token(value) in {_token(point) for point in ordered}
             or not (value < edge if side == 'low' else value > edge)):
-        raise ValueError('Further boundary values are outside representable positive arithmetic.')
+        # Nearby floats can have identical logarithms. Preserve successful
+        # coordinates; repair refusals using the same capped geometric rule.
+        return _rounded_geometric_extension(ordered, side)
     return value
 
 
@@ -545,11 +647,39 @@ def _adjacent(value, values):
     return max(lower) if lower else None, min(upper) if upper else None
 
 
+def _rounded_geometric_midpoint(lower, upper):
+    """Correctly round sqrt(lower * upper) using exact binary64 comparisons.
+
+    At most 63 bisections suffice; the exact product cannot overflow or
+    underflow. Only failed ordinary midpoint proposals use this fallback.
+    """
+    target = Fraction(lower) * Fraction(upper)
+    low = struct.unpack('>Q', struct.pack('>d', lower))[0]
+    high = struct.unpack('>Q', struct.pack('>d', upper))[0]
+
+    def value(bits):
+        return struct.unpack('>d', struct.pack('>Q', bits))[0]
+
+    while high - low > 1:
+        middle = (low + high) // 2
+        if Fraction(value(middle)) ** 2 <= target:
+            low = middle
+        else:
+            high = middle
+    below, above = value(low), value(high)
+    threshold = ((Fraction(below) + Fraction(above)) / 2) ** 2
+    return below if target < threshold or (target == threshold and low % 2 == 0) else above
+
+
 def _midpoint(first, second):
     lower, upper = sorted((first, second))
     value = math.sqrt(lower) * math.sqrt(upper)
-    return value if (lower < value < upper
-                     and _token(value) not in {_token(lower), _token(upper)}) else None
+    if lower < value < upper:
+        return value
+    if not lower < math.nextafter(lower, upper) < upper:
+        return None
+    value = _rounded_geometric_midpoint(lower, upper)
+    return value if lower < value < upper else None
 
 
 def _evidence(records, keys=None):
@@ -597,7 +727,8 @@ def _full_strip_certificates(results, anchors, records, stages, leader, best, co
             conditional = _conditional_values(results, anchor, axis)
             for side in ('low', 'high'):
                 levels = [(stage['label'], item) for stage in stages
-                          if stage['mean_score'] == best and stage['leader_key'] == parameter_hash(leader)
+                          if _score_from_token(stage['score']) == best
+                          and stage['leader_key'] == parameter_hash(leader)
                           for item in stage['levels'] if item['axis'] == axis and item['side'] == side]
                 levels = levels[-config.plateau_rounds:]
                 if (len(levels) < config.plateau_rounds or levels[-1][1]['to'] != anchor[axis]
@@ -610,19 +741,21 @@ def _full_strip_certificates(results, anchors, records, stages, leader, best, co
                 points = sorted((value for value in conditional if min(start, end) <= value <= max(start, end)),
                                 reverse=side == 'low')
                 indices = [conditional[value] for value in points]
-                means = [float(results['mean_test_score'][index])
-                         if _finite_score(results['mean_test_score'][index]) else math.nan
-                         for index in indices]
-                if (not all(valid[index] for index in indices)
-                        or any(after > before + config.improvement_tol for before, after in zip(means, means[1:]))
-                        or any(score > best + config.improvement_tol for score in means)):
+                if not all(valid[index] for index in indices):
+                    continue
+                scores = [results['_score_values'][index] for index in indices]
+                if (any(_improved(after, before, config.improvement_tol)
+                        for before, after in zip(scores, scores[1:]))
+                        or any(_improved(score, best, config.improvement_tol) for score in scores)):
                     continue
                 keys = [parameter_hash(results['params'][index]) for index in indices]
                 certificates.append({'slice_key': _slice_key(anchor, axis, side), 'axis': axis, 'side': side,
                     'edge_key': parameter_hash(anchor), 'leader_key': parameter_hash(leader),
-                    'conditional_parameters': _context(anchor, (axis,)), 'mean_score': best,
+                    'conditional_parameters': _context(anchor, (axis,)), 'mean_score': float(best),
+                    'score': score_token(best),
                     'completed_outward_rounds': len(levels), 'stage_labels': [label for label, _ in levels],
-                    'coordinates': points, 'conditional_mean_scores': means,
+                    'coordinates': points, 'conditional_mean_scores': [float(score) for score in scores],
+                    'conditional_scores': [score_token(score) for score in scores],
                     'evidence_keys': keys, 'evidence': _evidence(records, keys),
                     'basis': 'full_strip_plateau: completed outward stages and valid nonimproving same-slice evidence'})
     return certificates
@@ -691,7 +824,7 @@ def next_search_stage(records, initial_grid, config, state=None):
     state = deepcopy({} if state is None else state)
     if state and state.get('schema_version') != POLICY_STATE_SCHEMA_VERSION:
         raise ValueError('Unsupported search policy state schema; start a fresh output directory '
-                         'for exact parameter identities.')
+                         'for current parameter and score identities.')
     state['schema_version'] = POLICY_STATE_SCHEMA_VERSION
     identity = parameter_hash((asdict(config), grid))
     if state.get('identity', identity) != identity:
@@ -708,7 +841,7 @@ def next_search_stage(records, initial_grid, config, state=None):
     records = _policy_records(results)
     seen = set(records)
     ranked = ranked_valid_indices(results) if records else []
-    best = None if not len(ranked) else float(results['mean_test_score'][ranked[0]])
+    best = None if not len(ranked) else results['_score_values'][ranked[0]]
     leader = None if not len(ranked) else results['params'][int(ranked[0])]
     valid_keys = {parameter_hash(results['params'][int(index)]) for index in ranked}
 
@@ -729,7 +862,8 @@ def next_search_stage(records, initial_grid, config, state=None):
         if missing:
             return {'state': state, 'phase': pending['label'], 'candidates': missing, 'review': None}
         unchanged = _evidence(records, pending['baseline_keys']) == pending['baseline_evidence']
-        same_score = best == pending['baseline_best']
+        baseline_best = _score_from_token(pending['baseline_score'])
+        same_score = best == baseline_best
         local_evidence = [parameter_hash(p) for p in pending['candidates']
                           if _in_region(p, pending.get('region'), config)]
         steady = (unchanged and same_score and leader is not None
@@ -745,7 +879,8 @@ def next_search_stage(records, initial_grid, config, state=None):
             state.pop('stability_region', None)
         if pending['kind'] == 'expansion':
             all_valid = all(parameter_hash(p) in valid_keys for p in pending['candidates'])
-            if unchanged and all_valid and best <= pending['baseline_best'] + config.improvement_tol:
+            if (unchanged and all_valid and best is not None and baseline_best is not None
+                    and not _improved(best, baseline_best, config.improvement_tol)):
                 state['stalled_expansions'] += 1
             else:
                 state['stalled_expansions'] = 0
@@ -755,7 +890,8 @@ def next_search_stage(records, initial_grid, config, state=None):
             state['full_strip_stages'] = []
         elif pending['kind'] == 'expansion':
             state['full_strip_stages'].append({'label': pending['label'],
-                'mean_score': best, 'leader_key': parameter_hash(leader),
+                'mean_score': float(best), 'score': score_token(best),
+                'leader_key': parameter_hash(leader),
                 'levels': pending.get('outward_levels', [])})
         state['pending'] = None
     elif state.get('observed_evidence') not in (None, _evidence(records)):
@@ -789,7 +925,9 @@ def next_search_stage(records, initial_grid, config, state=None):
             label = 'conditional-repair-' + str(state['repair_rounds'])
         state['pending'] = {'kind': kind, 'label': label, 'candidates': candidates,
                             'baseline_keys': sorted(records), 'baseline_evidence': _evidence(records),
-                            'baseline_best': best, 'region': deepcopy(state.get('stability_region')),
+                            'baseline_best': None if best is None else float(best),
+                            'baseline_score': score_token(best),
+                            'region': deepcopy(state.get('stability_region')),
                             'outward_probes': [deepcopy(item) for item in state.get('boundary_issues', [])
                                                if kind == 'expansion' and item['issue'] == 'winning_boundary'
                                                and item['candidate'] is not None],
@@ -813,7 +951,7 @@ def next_search_stage(records, initial_grid, config, state=None):
     axes = {axis: sorted({float(p[axis]) for p in results['params']}) for axis in config.axes}
     fixed = {name: values for name, values in grid.items() if name not in config.axes}
     tied = [results['params'][int(index)] for index in ranked
-            if best - float(results['mean_test_score'][index]) <= config.tie_tol]
+            if _tied(best, results['_score_values'][index], config.tie_tol)]
     certificates = []
     if config.allow_boundary_plateau:
         certificates = _full_strip_certificates(results, tied, records, state['full_strip_stages'],
@@ -826,7 +964,8 @@ def next_search_stage(records, initial_grid, config, state=None):
     state['boundary_issues'] = issues
     state['boundary_plateau_evidence'] = waivers
     state['best_parameters'] = dict(leader)
-    state['best_mean_score'] = best
+    state['best_mean_score'] = float(best)
+    state['best_score'] = score_token(best)
     repair_only = bool(issues) and all(item['issue'] == 'missing_conditional_neighbor' for item in issues)
     if state.get('stability_region') is not None and not _in_region(leader, state['stability_region'], config):
         state['stable_rounds'] = 0

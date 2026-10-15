@@ -421,7 +421,7 @@ class BatchStoppingAndPipelineTests(unittest.TestCase):
         X, y = selection_data()
         for requested in (3, "full"):
             model = TwoStageDWDClassifier(
-                batch_size=requested, retention_fraction=0.01,
+                batch_size=requested, retention_fraction=0.025,
                 max_epochs=2, random_state=7,
             )
             with self.subTest(batch_size=requested):

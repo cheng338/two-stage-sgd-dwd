@@ -171,7 +171,7 @@ def test_selection_is_global_unique_nonmutating_and_repairs_legacy_counterexampl
     assert_array_equal(selected, [1, 3, 5])
     assert np.unique(selected).size == len(selected)
     assert_array_equal(scores, original)
-    assert len(select_near_boundary(scores, 0.01, np.random.default_rng(7))) == 1
+    assert len(select_near_boundary(scores, 0.01, np.random.default_rng(7))) == 0
     assert len(select_near_boundary(scores, 1, np.random.default_rng(7))) == len(scores)
 
 
@@ -179,7 +179,7 @@ def test_selection_tie_keys_are_reproducible_label_independent_and_use_ids():
     scores = np.array([-0.1, 0.1, -0.1, 0.1, 3.0])
     ids = np.array(["row-z", "row-a", "row-c", "row-b", "row-q"])
     seed = 394
-    expected = np.lexsort((ids, np.random.default_rng(seed).random(len(scores)), np.abs(scores)))[:3]
+    expected = np.lexsort((ids, np.random.default_rng(seed).random(len(scores)), np.abs(scores)))[:2]
     selected = select_near_boundary(scores, 0.5, np.random.default_rng(seed), ids)
     assert_array_equal(selected, expected)
     assert_array_equal(selected, select_near_boundary(-scores, 0.5, np.random.default_rng(seed), ids))
@@ -194,7 +194,26 @@ def test_selection_uses_original_ids_when_random_keys_also_tie():
 
     generator = TiedKeyGenerator(np.random.PCG64(7))
     selected = select_near_boundary([0.0, 0.0, 0.0], 0.5, generator, [9, 2, 5])
-    assert_array_equal(selected, [1, 2])
+    assert_array_equal(selected, [1])
+
+
+@pytest.mark.parametrize("count,fraction,expected_count", [
+    (101, .3, 30), (10, np.nextafter(.3, 0.), 2), (10, .3, 3),
+    (10, np.nextafter(.3, 1.), 3), (10, np.nextafter(1., 0.), 9),
+    (10, 1., 10), (10, np.nextafter(0., 1.), 0), (1, .9, 0),
+    (1, 1., 1), (0, .3, 0),
+])
+def test_selection_rounds_down_without_minimum_or_boundary_adjustment(count, fraction, expected_count):
+    scores = np.arange(count, dtype=float)[::-1]
+    generator = np.random.default_rng(71)
+    reference = np.random.default_rng(71)
+    keys = reference.random(count)
+    expected = np.lexsort((np.arange(count), keys, np.abs(scores)))[:expected_count]
+    selected = select_near_boundary(scores, fraction, generator)
+    assert selected.shape == (expected_count,)
+    assert_array_equal(selected, expected)
+    # Changing the retained count does not change the number of tie-key draws.
+    assert generator.bit_generator.state == reference.bit_generator.state
 
 
 @pytest.mark.parametrize("fraction", [0, -0.1, 1.01, np.nan, np.inf])

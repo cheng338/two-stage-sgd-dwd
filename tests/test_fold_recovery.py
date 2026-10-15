@@ -1,5 +1,6 @@
 """Completed-fold recovery preserves real fits and rejects changed evidence."""
 from copy import deepcopy
+from fractions import Fraction
 import hashlib
 import json
 from unittest.mock import patch
@@ -80,7 +81,9 @@ def test_real_fold_prefix_avoids_repeated_fits_and_preserves_statistics(backend,
     assert [fold['fold'] for fold in new_folds] == list(range(cut, 3))
     assert actual['folds'][:cut] == prefix == preserved
     assert nontiming(actual) == nontiming(reference)
-    assert actual['mean_score'] == np.mean([fold['accuracy'] for fold in actual['folds']])
+    exact_mean = sum((Fraction(fold['n_correct'], fold['n_validation'])
+                      for fold in actual['folds']), Fraction()) / len(actual['folds'])
+    assert actual['mean_score'] == float(exact_mean)
     json.dumps(actual, allow_nan=False)
 
 
@@ -116,8 +119,11 @@ def test_callback_failure_propagates_and_clears_cached_screening(failure):
     assert first.linear_fit_count_ == 1 and first._linear_cache == {}
 
 
-def test_selection_failure_is_a_completed_fold_with_finalized_timing():
-    params = PARAMS | {'retention_fraction': .01}
+@pytest.mark.parametrize('fraction,count,status', [
+    (.01, 0, 'empty_selection'), (.05, 1, 'single_class_selection'),
+])
+def test_selection_failure_is_a_completed_fold_with_finalized_timing(fraction, count, status):
+    params = PARAMS | {'retention_fraction': fraction}
     expected = evaluator().evaluate(params)
     first, saved = evaluator(), []
 
@@ -127,7 +133,7 @@ def test_selection_failure_is_a_completed_fold_with_finalized_timing():
 
     with pytest.raises(KeyboardInterrupt):
         first.evaluate(params, on_fold_completed=pause)
-    assert saved[0]['status'] == 'single_class_selection'
+    assert saved[0]['status'] == status and saved[0]['n_retained'] == count
     assert saved[0]['selection_seconds'] >= 0
     assert saved[0]['kernel_fit'] is None and saved[0]['kernel_updates'] == 0
     resumed = evaluator()
@@ -219,6 +225,26 @@ def reseal(saved):
     encoded = json.dumps(payload, sort_keys=True, separators=(',', ':'),
                          ensure_ascii=False, allow_nan=False).encode('utf-8')
     saved['sha256'] = hashlib.sha256(encoded).hexdigest()
+
+
+def test_empty_selection_checkpoint_survives_disk_roundtrip_without_kernel_fit(tmp_path):
+    params = PARAMS | {'retention_fraction': .01}
+    result = evaluator().evaluate(params)
+    progress = checkpoint(tmp_path, result)
+    progress.begin('coarse', params)
+    progress.save(result['folds'][0])
+    preserved = progress.path.read_bytes()
+    recovered = checkpoint(tmp_path, result)
+    prefix = recovered.begin('coarse', params)
+    assert prefix == result['folds'][:1]
+    assert prefix[0]['status'] == 'empty_selection'
+    assert prefix[0]['n_retained'] == 0
+    assert progress.path.read_bytes() == preserved
+    with patch.object(mnist_cv.KernelSGDDWD, 'fit', side_effect=AssertionError('kernel fit')):
+        resumed = evaluator().evaluate(params, completed_folds=prefix,
+                                        on_fold_completed=recovered.save)
+    assert nontiming(resumed) == nontiming(result)
+    assert len(read(progress.path)['folds']) == 3
 
 
 @pytest.mark.parametrize('kind', ['checksum', 'schema_bool', 'fold_count_float',

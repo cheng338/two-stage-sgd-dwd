@@ -492,7 +492,7 @@ class TwoStageContractTests(unittest.TestCase):
         model = TwoStageDWDClassifier(
             max_epochs=4, random_state=7, retention_fraction=0.4
         ).fit(self.X, self.y, observation_ids=ids)
-        k = int(np.ceil(0.4 * len(self.X)))
+        k = int(np.floor(0.4 * len(self.X)))
         chosen = model.selected_indices_
         self.assertEqual(len(chosen), k)
         self.assertEqual(len(np.unique(chosen)), k)
@@ -510,7 +510,7 @@ class TwoStageContractTests(unittest.TestCase):
     def test_single_class_selection_is_preserved_failure_not_quota_repair(self):
         ids = np.arange(100, 100 + len(self.X))
         model = TwoStageDWDClassifier(
-            max_epochs=2, random_state=42, retention_fraction=0.01
+            max_epochs=2, random_state=42, retention_fraction=0.025
         )
         with self.assertRaises(SelectionError) as caught:
             model.fit(self.X, self.y, observation_ids=ids)
@@ -521,6 +521,45 @@ class TwoStageContractTests(unittest.TestCase):
         self.assertTrue(np.all(np.isfinite(model.linear_estimator_.decision_function(self.X))))
         with self.assertRaises(NotFittedError):
             model.predict(self.X)
+
+    def test_empty_selection_is_preserved_failure_without_kernel_fit(self):
+        ids = np.arange(100, 100 + len(self.X))
+        model = TwoStageDWDClassifier(
+            max_epochs=2, random_state=42, retention_fraction=0.01
+        )
+        with patch.object(KernelSGDDWD, "fit", side_effect=AssertionError("kernel fit")), \
+             self.assertRaises(SelectionError) as caught:
+            model.fit(self.X, self.y, observation_ids=ids)
+        self.assertEqual(caught.exception.status, "empty_selection")
+        self.assertEqual(model.model_status_, "empty_selection")
+        self.assertEqual(model.stop_reason_, "selection_failure")
+        self.assertFalse(model.cv_eligible_)
+        self.assertEqual(model.n_retained_, 0)
+        self.assertEqual(len(model.selected_indices_), 0)
+        self.assertEqual(len(model.selected_ids_), 0)
+        assert_array_equal(model.selected_class_counts_, [0, 0])
+        self.assertEqual(model.selection_scores_.shape, (len(self.X),))
+        self.assertTrue(np.all(np.isfinite(model.linear_estimator_.decision_function(self.X))))
+        self.assertFalse(hasattr(model, "kernel_estimator_"))
+        with self.assertRaises(NotFittedError):
+            model.predict(self.X)
+
+    def test_two_rows_from_one_class_remain_selection_failure(self):
+        model = TwoStageDWDClassifier(
+            max_epochs=2, random_state=42, retention_fraction=0.05
+        )
+        # These two adjacent rows have the same original label. Selection must
+        # never replace one with a row from the other class merely to fit.
+        with patch.object(_estimators, "select_near_boundary", return_value=np.array([0, 1])), \
+             patch.object(KernelSGDDWD, "fit", side_effect=AssertionError("kernel fit")), \
+             self.assertRaises(SelectionError) as caught:
+            model.fit(self.X, self.y)
+        self.assertEqual(caught.exception.status, "single_class_selection")
+        self.assertEqual(model.n_retained_, 2)
+        assert_array_equal(model.selected_indices_, [0, 1])
+        assert_array_equal(model.selected_class_counts_, [2, 0])
+        self.assertFalse(model.cv_eligible_)
+        self.assertFalse(hasattr(model, "kernel_estimator_"))
 
     def test_observation_ids_must_correspond_to_rows(self):
         model = TwoStageDWDClassifier(max_epochs=1, retention_fraction=1.0)

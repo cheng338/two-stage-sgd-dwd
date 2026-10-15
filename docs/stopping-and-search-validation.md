@@ -1,5 +1,40 @@
 # Stopping and search validation
 
+## Exact accuracy and grid arithmetic update — October 15, 2026
+
+The adaptive example now compares the equally weighted mean of the saved
+integer fold fractions exactly. For example, permutations of fold accuracies
+0.1, 0.2, 0.3, 0.4 and 0.5 can produce different last bits under floating-point
+averaging even though both exact means are 0.3. That difference previously
+could override the parameter tie order or reset a stable refinement round.
+Unequal validation-fold sizes do not justify pooling the observations: the
+chosen statistic remains the mean of fold fractions. Exact ties retain the
+order smaller retention, larger `lambd`, then smaller `gamma`.
+
+Ranking, boundary and plateau checks, stability, resume state and qualified
+exports use this same count evidence. A genuine improvement smaller than one
+floating-point unit remains an improvement. `selection.json` records a
+`cv_score` numerator/denominator identity alongside its rounded display score.
+Invalid, partial or inconsistent counts are rejected; custom scalar-only
+evaluators remain supported without inventing integer evidence. Configuration
+schema 9 and policy schema 3 require a fresh directory for older checkpoints.
+Existing experiment records remain historical evidence under their original
+implementation. The public scikit-learn `make_search` wrapper is unchanged.
+
+Grid proposals retain every previously successful coordinate. If ordinary
+arithmetic refuses an outward proposal or interior midpoint, an exact-rational
+fallback rounds the same geometric rule. Independent high-precision checks
+cover coordinates near `1e-300`, `1e-8` and `1e308`, adjacent binary64 values,
+true underflow/overflow limits, and distinct parameter identities. A missing
+representable interior value still cannot earn refinement credit.
+
+These are corrections to numerical comparisons and grid construction. They
+do not relax the required search evidence, change the SGD methodology, or
+establish new MNIST performance results. Current validation is summarized in
+[VALIDATION.md](../VALIDATION.md).
+
+## Historical stopping checks
+
 Historical development baseline: `0.6.0.dev20261003`, October 3, 2026.
 The stopping and search interfaces described here are retained in
 `0.7.0.dev20261003`; the test counts and MNIST outcomes below concern the
