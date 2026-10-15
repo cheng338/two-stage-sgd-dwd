@@ -1,8 +1,7 @@
 # Release policy
 
 Version numbers describe grouped releases, not the number of fixes, commits,
-validation rounds or builds. The current published release is **0.9.0**;
-the next planned maintenance release is **0.9.1**.
+validation rounds or builds. The current release is **0.9.1**.
 
 This policy follows the release practice of Chang Cheng's
 [ensemble-dwd](https://github.com/cheng338/ensemble-dwd/releases) and
@@ -32,7 +31,7 @@ validation and any performance cost. Changes to the objective, sampling rule,
 selection method or estimator defaults require an explicit scope assessment;
 they are not ordinary implementation optimizations.
 
-For planned 0.9.1, the author requested downward rounding of the retained
+For 0.9.1, the author requested downward rounding of the retained
 observation count to match the ensemble classifiers. This is an explicitly
 approved count-convention change within the existing two-stage method and
 parameter interface, included in the maintenance release. It can change new
@@ -43,7 +42,7 @@ Published artifacts, saved models and original experiment records retain
 their earlier convention.
 
 Python and dependency support changes may accompany a maintenance release,
-but their compatibility impact must be stated. In particular, planned 0.9.1
+but their compatibility impact must be stated. In particular, 0.9.1
 requires Python 3.11 or newer; Python 3.10 users retain the existing 0.9.0
 release. Workflow checkpoint incompatibilities must also be disclosed even
 when the estimator API is unchanged. This is a project release policy, not a
@@ -68,6 +67,7 @@ promise that every patch preserves every runtime or saved workflow format.
    tag and artifact. Never renumber earlier releases to make the sequence
    smaller or replace their assets with newly changed code.
 
-For the present unreleased work, use **0.9.1** when release preparation is
-requested. Do not increment to 0.10.0 solely for the accumulated fixes,
-profiling, search corrections or Python support change.
+Future changes accumulate under `Unreleased` until another release is
+requested. Select its version from the scope above; do not increment to
+0.10.0 solely for routine fixes, profiling, search corrections or a Python
+support change.

@@ -1,9 +1,6 @@
 # Changelog
 
-## Unreleased
-
-Planned release: **0.9.1**. Changes accumulate here until release preparation;
-the published version remains 0.9.0. See the [release policy](docs/release-policy.md).
+## 0.9.1 - 2026-10-15
 
 - Use patch releases for grouped fixes, performance improvements and optional
   diagnostics or workflow controls. Reserve minor releases for substantial new

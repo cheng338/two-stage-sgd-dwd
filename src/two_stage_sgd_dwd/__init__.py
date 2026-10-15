@@ -1,6 +1,6 @@
 """Projected and RKHS stochastic-gradient distance-weighted discrimination."""
 
-__version__ = "0.9.0"
+__version__ = "0.9.1"
 
 from ._estimators import (KernelSGDDWD, LinearSGDDWD, NumericalFailure,
                           SelectionError, TrainingError, TwoStageDWDClassifier)
