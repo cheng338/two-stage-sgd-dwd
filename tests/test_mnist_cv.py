@@ -73,6 +73,7 @@ def test_cached_evaluation_matches_public_pipeline_bitwise_for_retention_and_wid
             assert fold_record["stage_seeds"] == direct.stage_seeds_
             assert fold_record["gamma_resolved"] == direct.gamma_
             assert fold_record["selected_ids_sha256"] == mnist_cv._ids_hash(direct.selected_ids_)
+            assert fold_record["selection_composition"] == direct.selection_composition_
             assert fold_record["accuracy"] == np.mean(direct.predict(X[validation]) == y[validation])
             assert fold_record["linear_updates"] == direct.linear_estimator_.n_updates_
             assert fold_record["kernel_updates"] == expected.n_updates_
@@ -117,6 +118,57 @@ def test_linear_fits_are_reused_across_all_kernel_candidates_and_refresh_with_co
     evaluator.evaluate({"lambd": 1e-6, "gamma": 0.2, "retention_fraction": 1.0})
     assert len(calls) == 3 * len(folds)
     assert len(evaluator._linear_cache) == len(folds)
+
+
+@pytest.mark.parametrize("fraction", [.75, .01, .06])
+def test_imbalanced_composition_is_fold_local_and_preserved_across_cache_and_replay(monkeypatch, fraction):
+    X = np.r_[-np.linspace(.05, 1.2, 24), np.linspace(.08, 1.5, 12)][:, None]
+    y = np.repeat(["zebra", "apricot"], [24, 12])
+    ids = np.array([f"train:{index}" for index in range(len(y))])
+    folds = list(StratifiedKFold(2, shuffle=True, random_state=17).split(X, y))
+    selected = []
+    original_selector = mnist_cv.select_near_boundary
+
+    def observe(*args, **kwargs):
+        indices = original_selector(*args, **kwargs)
+        selected.append(indices.copy())
+        return indices
+
+    monkeypatch.setattr(mnist_cv, "select_near_boundary", observe)
+    evaluator = mnist_cv.FoldEvaluator(X, y, ids, folds, max_epochs=2, random_state=31)
+    params = {"lambd": .02, "gamma": .4, "retention_fraction": fraction}
+    first = evaluator.evaluate(params)
+    for record, (train, _), indices in zip(first["folds"], folds, selected):
+        report = record["selection_composition"]
+        assert report["training_size"] == len(train) == 18
+        assert report["selected_size"] == len(indices)
+        assert report["selection_ratio_realized"] == len(indices) / len(train)
+        for row, label in zip(report["classes"], np.unique(y)):
+            total = int(np.count_nonzero(y[train] == label))
+            kept = int(np.count_nonzero(y[train][indices] == label))
+            assert row == {"label": label, "training_count": total,
+                           "training_fraction": total / len(train), "selected_count": kept,
+                           "selected_fraction": kept / len(indices) if len(indices) else None,
+                           "class_retention_fraction": kept / total}
+    second = evaluator.evaluate({**params, "lambd": .03})
+    assert evaluator.linear_fit_count_ == len(folds)
+    assert all(row["linear_cache_hit"] for row in second["folds"])
+    assert [row["selection_composition"] for row in first["folds"]] == [
+        row["selection_composition"] for row in second["folds"]]
+    saved = json.loads(json.dumps(first["folds"], allow_nan=False))
+    with patch.object(mnist_cv.LinearSGDDWD, "fit", side_effect=AssertionError("linear refit")), \
+         patch.object(mnist_cv.KernelSGDDWD, "fit", side_effect=AssertionError("kernel refit")):
+        replay = evaluator.evaluate(params, completed_folds=saved)
+    assert replay["folds"] == first["folds"]
+    replay["folds"][0]["selection_composition"]["classes"][0]["training_count"] = 999
+    assert saved[0]["selection_composition"]["classes"][0]["training_count"] != 999
+    with pytest.raises(ValueError, match="selection composition"):
+        evaluator.evaluate(params, completed_folds=replay["folds"])
+    # Older records carry no new report; replay must not invent one.
+    for record in saved:
+        del record["selection_composition"]
+    legacy = evaluator.evaluate(params, completed_folds=saved)
+    assert all("selection_composition" not in record for record in legacy["folds"])
 
 
 @pytest.mark.parametrize("fraction,count,status", [

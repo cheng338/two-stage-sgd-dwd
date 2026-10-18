@@ -13,12 +13,12 @@
   "references": [
     {
       "type": "thesis",
-      "title": "Overcoming the Curses of Dimensionality and Kernelization: Scalable DWD and Supervised NMF",
+      "title": "Ensemble Kernel Distance-Weighted Discrimination and Supervised Nonnegative Matrix Factorization for Classification",
       "authors": [{"family-names": "Cheng", "given-names": "Chang"}],
       "institution": {"name": "Purdue University"},
       "thesis-type": "Doctoral dissertation manuscript",
       "year": 2026,
-      "notes": "Chapter 3, Our Earlier Attempt on Kernel DWD. Revised manuscript supplied October 4, 2026; the title page is dated December 2026."
+      "notes": "Chapter 3, Our Earlier Attempt on Kernel DWD."
     },
     {
       "type": "software",

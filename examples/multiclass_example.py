@@ -11,6 +11,7 @@ from sklearn.utils.validation import check_is_fitted
 from threadpoolctl import threadpool_limits
 
 from two_stage_sgd_dwd import TwoStageDWDClassifier
+from two_stage_sgd_dwd._selection_reporting import selection_composition
 
 
 def pair_diagnostics(model):
@@ -28,6 +29,9 @@ def pair_diagnostics(model):
             "n_samples_fit": int(estimator.n_samples_fit_),
             "n_retained": int(estimator.n_retained_),
             "selected_class_counts": estimator.selected_class_counts_.tolist(),
+            "selection_composition": selection_composition(
+                pair, getattr(estimator, "training_class_counts_", None),
+                getattr(estimator, "selected_class_counts_", None)),
             "model_status": estimator.model_status_,
             "cv_eligible": bool(estimator.cv_eligible_),
             "stage_diagnostics": deepcopy(estimator.stage_diagnostics_),

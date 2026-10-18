@@ -1,6 +1,7 @@
 """External one-versus-one composition preserves each binary SGD fit."""
 
 import copy
+import json
 import importlib.util
 from itertools import combinations
 from pathlib import Path
@@ -128,6 +129,12 @@ def test_ovo_matches_manual_binary_fits_and_maps_pair_diagnostics(
                 int(np.count_nonzero(selected_labels == first)),
                 int(np.count_nonzero(selected_labels == second)),
             ]
+            composition = report["selection_composition"]
+            assert [row["label"] for row in composition["classes"]] == [first, second]
+            assert composition["training_size"] == len(pair_y)
+            assert composition["selected_size"] == fitted.n_retained_
+            assert [row["selected_count"] for row in composition["classes"]] == report["selected_class_counts"]
+            json.dumps(composition, allow_nan=False)
             assert report["model_status"] == fitted.model_status_ == "trained"
             assert report["cv_eligible"] is True
             assert report["stage_seeds"] == fitted.stage_seeds_
@@ -162,11 +169,38 @@ def test_report_mutation_cannot_change_fitted_pair_diagnostics():
     reports[0]["selected_class_counts"][0] = -123
     reports[0]["stage_seeds"]["linear_sgd"] = -123
     reports[0]["stage_diagnostics"]["linear"]["n_iter"] = -123
+    reports[0]["selection_composition"]["classes"][0]["training_count"] = -123
     assert pair_diagnostics(model) == before
     fitted = model.estimators_[0]
     assert fitted.selected_class_counts_[0] >= 0
     assert fitted.stage_seeds_["linear_sgd"] >= 0
     assert fitted.stage_diagnostics_["linear"]["n_iter"] > 0
+
+
+def test_imbalanced_ovo_counts_map_original_strings_and_legacy_evidence_stays_unknown():
+    X, y = multiclass_problem(3, "strings")
+    keep = np.concatenate([np.flatnonzero(y == label)[:count]
+                           for label, count in zip(np.unique(y), [24, 16, 10])])
+    X, y = X[keep], y[keep]
+    with threadpool_limits(1):
+        model = OneVsOneClassifier(binary_prototype(retention_fraction=1.), n_jobs=1).fit(X, y)
+    reports = pair_diagnostics(model)
+    for report, pair in zip(reports, combinations(np.unique(y), 2)):
+        composition = report["selection_composition"]
+        counts = [int(np.count_nonzero(y == label)) for label in pair]
+        assert composition["training_size"] == sum(counts)
+        for row, label, count in zip(composition["classes"], pair, counts):
+            assert row == {"label": label, "training_count": count,
+                           "training_fraction": count / sum(counts), "selected_count": count,
+                           "selected_fraction": count / sum(counts), "class_retention_fraction": 1.}
+        json.dumps(composition, allow_nan=False)
+    del model.estimators_[0].training_class_counts_
+    model.estimators_[1].training_class_counts_ = np.array([-1, 10])
+    legacy = pair_diagnostics(model)
+    for report in legacy[:2]:
+        assert report["selection_composition"]["available"] is False
+        assert "classes" not in report["selection_composition"]
+    assert legacy[2]["selection_composition"] == reports[2]["selection_composition"]
 
 
 @pytest.mark.parametrize("backend", ["python", "auto"])

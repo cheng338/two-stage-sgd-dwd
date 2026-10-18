@@ -26,6 +26,7 @@ from _runtime_identity import runtime_identity
 from two_stage_sgd_dwd import KernelSGDDWD, LinearSGDDWD, SelectionError, TrainingError
 from two_stage_sgd_dwd import __version__ as _PACKAGE_VERSION
 from two_stage_sgd_dwd._core import _mean_finite_losses, dwd_loss, select_near_boundary
+from two_stage_sgd_dwd._selection_reporting import selection_composition
 from _adaptive_grid import fold_accuracy, record_score
 from two_stage_sgd_dwd._estimators import _generator
 from two_stage_sgd_dwd._kernels import resolve_kernel
@@ -339,6 +340,13 @@ class FoldEvaluator:
             elif (record.get("status") not in ("empty_selection", "single_class_selection")
                   or record.get("accuracy") is not None):
                 raise ValueError("Invalid completed selection failure")
+            if "selection_composition" in record:
+                expected = selection_composition(
+                    self._classes, [int(np.sum(self._y[train] == label))
+                                    for label in self._classes],
+                    record.get("selected_class_counts"))
+                if record["selection_composition"] != expected:
+                    raise ValueError("Completed selection composition differs from its class counts")
         return records
 
     def _evaluate(self, params, *, completed_folds=None, on_fold_completed=None):
@@ -381,6 +389,9 @@ class FoldEvaluator:
                 selected_rows = train[selected]
                 counts = [int(np.sum(self._y[selected_rows] == label)) for label in self._classes]
                 record.update(n_retained=len(selected), selected_class_counts=counts,
+                              selection_composition=selection_composition(
+                                  self._classes, [int(np.sum(self._y[train] == label))
+                                                 for label in self._classes], counts),
                               selected_ids_sha256=_ids_hash(self._ids[selected_rows]))
                 if len(selected) == 0:
                     raise SelectionError("The retention fraction selects no observations",

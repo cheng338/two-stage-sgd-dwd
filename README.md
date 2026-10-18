@@ -22,8 +22,8 @@ Chang Cheng developed this package from his original research scripts
 accompanying his dissertation. The two-stage method follows Chapter 3,
 **"Our Earlier Attempt on Kernel DWD"**, of:
 
-> Cheng, Chang (2026). *Overcoming the Curses of Dimensionality and
-> Kernelization: Scalable DWD and Supervised NMF*. Doctoral dissertation
+> Cheng, Chang (2026). *Ensemble Kernel Distance-Weighted Discrimination and
+> Supervised Nonnegative Matrix Factorization for Classification*. Doctoral dissertation
 > manuscript, Purdue University, Department of Statistics.
 
 # Installation
@@ -81,8 +81,43 @@ model.fit(X_train, y_train, validation_data=(X_validation, y_validation))
 scores = model.decision_function(X_test)
 predictions = model.predict(X_test)
 print(model.selected_ids_, model.selected_class_counts_)
+print(model.selection_composition_)
 print(model.stop_reason_, model.model_status_)
 ```
+
+# Optional optimization diagnostics
+
+After fitting, an explicit call can assess the returned model's optimization
+accuracy on its original training data:
+
+```python
+from two_stage_sgd_dwd import optimization_diagnostics
+
+report = optimization_diagnostics(model, X_train, y_train, block_size=128)
+print(report["linear_stage"]["numerical_gap_estimate"])
+print(report["kernel_stage"]["numerical_gap_estimate"])
+```
+
+For a two-stage model, pass the full original training data in the same row
+order and with the same preprocessing used for fitting. The helper uses all
+rows for the linear stage and the stored selected rows for the kernel stage.
+Standalone linear or kernel estimators return one report directly. The helper
+does not accept a preprocessing `Pipeline` or multiclass wrapper; evaluate
+each fitted binary estimator with its corresponding preprocessed training
+rows and fitted label encoding.
+
+Both stages retain their free, unregularized intercepts. A small numerical
+primal-dual gap supports near-optimality for the particular objective assessed;
+a large estimate can be conservative and does not establish poor prediction
+accuracy. These floating-point estimates are not formal certificates or a
+recommended automatic stopping rule. The helper leaves fitted models and
+their convergence flags unchanged and is never called implicitly by `fit()`.
+
+Kernel diagnostics make two blocked kernel passes, adding work comparable to
+an explicit objective evaluation. Record this time separately from fitting.
+Original fitting labels and linear training rows cannot all be checked from
+stored estimator metadata. See [the diagnostic contract](docs/method.md#optional-post-fit-optimization-diagnostics)
+for input requirements, numerical limits and failure behavior.
 
 # Kernel choice and parameter tuning
 
@@ -504,6 +539,10 @@ small demonstration. It is not a retention recommendation or a default change.
 The example's `pair_diagnostics(model)` helper copies each successful pair's
 sample and retention counts, status, stage diagnostics and seeds. The reported
 class pair uses original labels; selected class counts follow that order.
+Its `selection_composition` report also maps training/selected counts and
+fractions back to those labels. Retention within each class is reported
+separately from its share of the selected set. Older fits without recorded
+training counts report that composition as unavailable.
 Scikit-learn passes pair-local labels `0` and `1` to the binary estimators.
 Their selected indices and default observation IDs refer to pair-local rows,
 not the original multiclass data. The helper accepts the fitted wrapper itself,
@@ -709,9 +748,9 @@ train/validation splits, or execute experiments at import time.
 
 # Basis and citation
 
-The implementation follows Chapter 3 of the October 4, 2026 manuscript revision
-cited in the [overview](#overview). When using the package, cite the dissertation
-and the software version:
+The implementation was checked against Chapter 3 of the October 4, 2026
+manuscript revision. When using the package, cite the dissertation under its
+current title in the [overview](#overview) and the software version:
 
 > Cheng, Chang (2026). *two-stage-sgd-dwd: Two-Stage DWD via Stochastic
 > Gradient Descent*, version 0.9.1 [Computer software].
@@ -725,4 +764,8 @@ Routine fixes and improvements are grouped into patch releases; substantial
 new capabilities use a minor release. Development changes accumulate under
 `Unreleased` without a version bump for each change. See the
 [release policy](docs/release-policy.md).
-Licensing has not been decided.
+
+# License
+
+Copyright (c) 2026 Chang Cheng. **All Rights Reserved.** Licensing terms have
+not yet been determined; no license is granted. See [LICENSE](LICENSE).

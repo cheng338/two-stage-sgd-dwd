@@ -1,3 +1,70 @@
+# October 17, 2026 optional optimization diagnostics
+
+The explicitly requested `optimization_diagnostics()` helper preserves both
+free intercepts, each stage's fitting-set normalization, fitted coefficients,
+predictions and convergence flags. It is not part of the default fitting path.
+It reports numerical objective-gap and stationarity estimates, not formal
+certificates or a new automatic stopping rule.
+
+The final package integration passed 187 tests and 197 subtests in the Windows
+Python 3.12 AOCL environment, including 26 new diagnostic tests. Coverage
+includes analytic optima, finite differences, constrained and singular-kernel
+geometry, input failures, unchanged model/input/RNG state, single/mini/full
+batches, the actual selected subset and validation-selected checkpoints.
+On Robust, an isolated installed native wheel passed 76 tests using Python
+3.12.15, NumPy 2.5.4 and MKL 2026.1. Nine two-stage fits across linear/RBF/poly
+kernels and three batch modes matched the previously validated prototype's
+diagnostic values exactly, excluding elapsed time and omitted witness arrays.
+Installed source hashes were verified; the shared environment package was
+not replaced. These correctness checks used one numerical thread.
+The final checks include consistent `FloatingPointError` reporting when a
+finite loss sum overflows, with the fitted model still usable afterward.
+
+Before integration, the prototype passed 19 independent fixture tests and
+comparisons on 16 small objectives at 1 and 800 SGD epochs, using independent
+SLSQP/BFGS reference solutions. Every reference's appropriate stationarity
+residual was below 1.90e-7 and its own absolute numerical gap below 3.47e-7.
+An independent recomputation of 48 saved dual bounds agreed within 1.12e-16.
+Some bounds were conservative: in one linear case the bound was about 213
+times the difference from the accurate numerical reference. This supports
+optional reporting but does not justify automatic gap-based stopping.
+
+Three synthetic kernel cost probes with 16 numerical threads gave median
+diagnostic times of approximately 0.006, 0.066 and 0.535 seconds for 256, 1024
+and 2048 rows, respectively. Each used three timed calls after warmup; these
+are not MNIST timings or universal cost guarantees. Two blocked kernel passes
+replace a retained full Gram cache. At 2048 rows with block size 128, the
+largest kernel-block payload was 2 MiB, not a measured process memory peak.
+No statistical study or historical result was changed by this addition.
+
+# October 17, 2026 class-composition and oracle coverage
+
+Two permanent independent-objective tests now cover an imbalanced kernel
+problem with conflicting duplicate observations and a singular Gram matrix,
+and a wide linear problem with 12 observations and 128 nonconstant features.
+They retain the audited seeds, update budgets and objective-gap tolerances.
+The kernel oracle uses the free-intercept RKHS objective; the linear oracle
+constrains only the slope norm. All five oracle tests passed in both the
+Python 3.12 AOCL and MKL environments. These are correctness tests, not a
+replicated HDLSS accuracy study or an optimality certificate for other fits.
+
+Class-composition reporting passed 129 focused tests and 59 subtests covering
+binary fits, CV receipts, multiclass pair mapping and selection failures. After
+tightening malformed signed/unsigned count validation, all 19 reporting tests
+passed, including the added extreme-count case. Another 135 tuning, recovery,
+timing-summary and fit-diagnostic tests passed, with 33 subtests. The focused
+run retained the existing warning from the deliberately invalid-label test.
+
+A before/after comparison against the preceding local source checked 24 fixed-
+budget cases: 20 successful fits and four empty/one-class selection failures.
+Selected rows, stage seeds, coefficients, scores, predictions, update counts
+and failure outcomes matched exactly. The cases cover linear, RBF and
+polynomial kernels, single-observation, mini-batch and full-batch updates,
+and Python or automatic optimizer selection. Serialization round trips also
+preserved scores and predictions. Optimizer source and the native binary were
+unchanged. These small checks used one native thread and make no speed claim;
+report construction adds bounded metadata work to the selection phase.
+
 # Current Python support
 
 The current development version requires Python 3.11 or newer. Native builds

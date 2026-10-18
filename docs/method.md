@@ -26,6 +26,17 @@ value. The original Chapter 3 guide's 5% remains an explicit API setting,
 outside the recommended grid; changing the default does not establish its
 empirical superiority.
 
+After selection, `training_class_counts_` and `selected_class_counts_` follow
+`classes_` order. `selection_composition_` records the original labels, training
+and selected sizes, realized selection ratio, and per-class counts and fractions.
+For each class, `selected_fraction` divides its selected count by the total
+selected count; `class_retention_fraction` divides by that class's training
+count. These are descriptive facts, not class weights or selection quotas.
+Empty selections retain zero counts and zero retention, with `selected_fraction`
+set to `None` because the selected set has no class mixture. Empty and one-class
+selection failures preserve this evidence. MNIST CV records use the same
+`selection_composition` structure with counts from the fold's training rows.
+
 For actual kernel fitting size m, the objective is
 mean L(y_i (h(x_i) + b)) + lambd * ||h||_H^2.
 `lambd` is the sole kernel regularization parameter, with default 1e-6, and
@@ -147,7 +158,7 @@ checkpoint update, and `n_epochs_completed_` is processed observations divided
 by fitting-set size (possibly fractional after truncation). `cap_reached_`
 separates epoch/time limits from `fit_usable_`. `cv_eligible_` permits trained
 fixed-epoch fits, but excludes wall-time truncation and untrained fallbacks.
-No objective or optimality test is run: `optimality_checked_`,
+No objective or optimality test is run during fitting: `optimality_checked_`,
 `optimality_met_`, and `converged_` remain false. The last two mean no
 certificate was established, not that divergence was proved. Two-stage
 `stage_diagnostics_` preserves these facts separately for both fits.
@@ -237,6 +248,75 @@ populated only when an update requests a column. It does not reuse a fitted
 model across repetitions. Failed numerical fits remain failed under either
 backend; no older iterate is silently used as a successful fallback. See
 [execution controls and timing scope](optimizer-backends.md).
+
+## Optional post-fit optimization diagnostics
+
+`optimization_diagnostics(estimator, X, y, block_size=256)` is an explicit
+post-fit helper for the three binary estimators. It does not participate in
+SGD updates, checkpoint selection, fitting budgets or cross-validation. It
+assesses the returned fitted coefficients, including a returned validation
+checkpoint, and leaves estimator state and `optimality_checked_`,
+`optimality_met_` and `converged_` unchanged.
+
+Supply the original preprocessed fitting rows and labels in their original
+order. A standalone kernel estimator requires `X` to equal its stored fitting
+basis. For a two-stage estimator supply the full fitting set: the helper
+evaluates the linear stage there and the kernel stage only on its recorded
+selected indices. Each mean uses that stage's own sample count. Fitting-label
+identity and the full original linear design are not stored, so the caller
+must preserve them. A same-sized replacement data set cannot be interpreted
+as a diagnostic of the original training objective. For multiclass work call
+the helper separately for each binary fit with that fit's label encoding;
+preprocessing pipelines and multiclass wrappers are not accepted directly.
+
+The report contains the objective, free-intercept derivative, a stationarity
+residual, a numerical dual lower-bound estimate and the difference between
+primal and dual values. For linear fits the residual uses a unit-step
+projected gradient of the slope plus the intercept derivative. For kernel
+fits it uses the RKHS gradient norm plus the intercept derivative; a Euclidean
+coefficient-gradient norm would depend on the kernel representation. The
+linear unit-ball constraint and the kernel `lambd * ||h||^2` penalty apply
+only to their respective slopes/functions. Both intercepts remain free.
+
+For the normalized loss, the identity
+`V(u) = sup_{0 <= alpha <= 1} (sqrt(alpha) - alpha*u)` yields dual objectives
+`mean(sqrt(alpha)) - ||X.T @ q||` for linear fits and
+`mean(sqrt(alpha)) - q.T @ K @ q / (4*lambd)` for kernel fits, where
+`q = y_signed * alpha / n` and a free intercept requires `sum(q) = 0`.
+The helper starts from the negative loss derivative and reduces the larger
+class total to construct a balanced candidate. It corrects residual imbalance
+using a conservative bound on an optimal intercept, and can fall back to the
+zero dual candidate. That correction is a reporting calculation, not a new
+constraint or penalty on the fitted intercept. No Gram inverse, extra ridge,
+or change of kernel is used; singular PSD kernels are supported.
+
+A small numerical gap supports near-optimality for the stated objective.
+A large bound can be loose, and it is not the actual remaining objective
+error or a test-accuracy deficit. Values for different subsets, penalties or
+preprocessing describe different objectives. The helper does not certify the
+global selection procedure or provide a universal stopping tolerance.
+`formal_certificate` is always false: float64 reductions and kernel evaluation
+do not give interval-arithmetic guarantees. The report preserves tiny negative
+gaps within its stated roundoff tolerance and rejects materially negative
+ones. Quadratic-form tolerances and the amplification by small `lambd` are
+reported. An extreme input can make a diagnostic unavailable even when a
+fitted model remains usable. Deterministic callable kernels must satisfy the
+PSD assumption; the helper cannot control a callable's external side effects.
+
+The helper raises `TypeError` for unsupported estimator types, `ValueError`
+for invalid or incompatible data and
+`FloatingPointError` for detected numerical invalidity; an unfitted estimator
+raises scikit-learn's `NotFittedError`. A failure does not invalidate the fitted
+model or install a replacement result. Reports are independent, JSON-compatible
+dictionaries. Two-stage reports contain `linear_stage` and `kernel_stage`.
+
+Linear work is proportional to the design size. Kernel work uses two blocked
+passes over the actual stage data, evaluating `2*n*n` kernel values. The report
+includes elapsed time, kernel-value count and largest kernel-block element
+count. Working memory includes that block and additional vectors and library
+workspace; the block count is not a process peak-RAM measurement. No full
+Gram cache is retained. Keep diagnostic timing separate from fit/prediction
+timing, and do not enable it automatically for every CV fit.
 
 ## Relationship to the previous packages
 

@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+- State All Rights Reserved while licensing terms remain undecided, include
+  the notice in distributions, and update the dissertation title in citations.
+  Use current license metadata with setuptools 77.0.3 or newer for source
+  builds; runtime dependencies are unchanged.
+- Add explicitly requested post-fit `optimization_diagnostics()` for linear,
+  kernel and two-stage fits. Report numerical objective-gap and stationarity
+  diagnostics using each stage's actual fitting data and free intercept.
+  Preserve fitted state, optimization budgets and convergence flags; the
+  numerical estimates are not exact certificates or automatic stopping rules.
+- Add independent objective regression tests for imbalanced kernel data with
+  conflicting duplicate observations and for wide linear data. Retain fixed
+  SGD budgets, free intercepts and explicit finite-budget objective tolerances.
+- Report training and selected class composition, including retention within
+  each class, in two-stage fits, MNIST CV receipts and multiclass pair summaries.
+  Preserve original labels and distinguish an empty selection's undefined class
+  proportions from its zero retention. Selection and optimization are unchanged.
+- Enable the validated vectorized replacement-sampling path on NumPy 2.5.3 and 2.5.4
+  for the native single-observation optimizer. Preserve sampled observations,
+  generator state, update order and failure recovery; retain scalar sampling
+  for unvalidated versions and custom generator types. SGD still updates one
+  observation at a time, and the snapshot-copy optimization is unchanged.
+
 ## 0.9.1 - 2026-10-15
 
 - Use patch releases for grouped fixes, performance improvements and optional

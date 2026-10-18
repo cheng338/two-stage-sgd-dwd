@@ -111,7 +111,7 @@ class EpochStateTests(ExactAssertions):
         self.assertEqual(len(requests), 3)
 
     def test_other_versions_and_generator_subclasses_keep_each_epoch_copy(self):
-        for version in ("2.5.1", "2.5.3", "2.5.2+custom"):
+        for version in ("2.5.1", "2.5.3", "2.5.4", "2.5.2+custom"):
             with self.subTest(version=version):
                 self.run_copy_probe(np.random.Generator(np.random.PCG64(44)), version, 3)
         self.run_copy_probe(GeneratorSubclass(np.random.PCG64(44)), "2.5.2", 3)

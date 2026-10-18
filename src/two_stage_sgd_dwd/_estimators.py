@@ -15,6 +15,7 @@ from ._core import (_mean_finite_losses, dwd_loss, kernel_batch_step, kernel_ste
 from ._cache import LazyKernelColumnCache
 from ._kernels import _TRUSTED, resolve_kernel
 from ._prediction import rbf_prediction_scores, rbf_prediction_scores_blas
+from ._selection_reporting import selection_composition
 
 
 class TrainingError(RuntimeError):
@@ -822,6 +823,9 @@ class TwoStageDWDClassifier(_BaseDWD):
             self.selected_ids_ = ids[self.selected_indices_].copy()
             selected_y = y[self.selected_indices_]
             self.selected_class_counts_ = np.array([np.sum(selected_y == c) for c in self.classes_])
+            self.training_class_counts_ = np.array([np.sum(y == c) for c in self.classes_])
+            self.selection_composition_ = selection_composition(
+                self.classes_, self.training_class_counts_, self.selected_class_counts_)
             self.selection_seconds_ = time.perf_counter() - began_selection
             self.n_retained_ = len(self.selected_indices_)
             self.n_samples_fit_ = len(y)

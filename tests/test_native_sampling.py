@@ -1,6 +1,6 @@
 """Exact replacement streams, guarded dispatch, and native failed-prefix parity.
 
-These are implementation checks for the explicitly supported NumPy version,
+These are implementation checks for the explicitly supported NumPy versions,
 not a claim that NumPy guarantees scalar/array stream equivalence in general.
 """
 import copy
@@ -22,6 +22,7 @@ except (ImportError, OSError):
 
 BITS = (np.random.PCG64, np.random.PCG64DXSM, np.random.Philox,
         np.random.SFC64, np.random.MT19937)
+SUPPORTED_NUMPY_VERSIONS = ('2.5.2', '2.5.3', '2.5.4')
 requires_native = unittest.skipIf(_sgd_accel is None, "Optional compiled extension unavailable")
 
 
@@ -80,8 +81,8 @@ class ReplacementStreamTests(unittest.TestCase):
     def test_helper_preserves_output_complete_state_and_continuation(self):
         for bit_type in BITS:
             for seed in (0, 42, 20261004):
-                for m in (1, 2, 3, 7, 8, 17, 32, 257, 725, 2417):
-                    for advance in (0, 1, 623):
+                for m in (1, 2, 3, 7, 8, 17, 31, 32, 33, 255, 256, 257, 725, 2417):
+                    for advance in (0, 1, 2, 623, 624):
                         with self.subTest(bit=bit_type.__name__, seed=seed, m=m, advance=advance):
                             rng = advanced_generator(bit_type, seed, advance)
                             oracle = copy.deepcopy(rng)
@@ -90,16 +91,22 @@ class ReplacementStreamTests(unittest.TestCase):
                                 expected = scalar_indices(oracle, m)
                                 self.assert_stream(actual, expected, rng, oracle)
 
-    @unittest.skipUnless(np.__version__ == '2.5.2', 'Source-specific NumPy 2.5.2 evidence')
+    @unittest.skipUnless(np.__version__ in SUPPORTED_NUMPY_VERSIONS,
+                         'Scalar/array evidence requires an actual supported NumPy release')
     def test_wide_bounds_use_small_independent_draw_counts(self):
         # The helper's bound equals its length. Probe huge bounds directly so
         # these dependency checks never attempt enormous helper allocations.
-        bounds = (1, 2, 3, 7, 16, 17, 255, 256, 257, 2**31 - 1, 2**31,
-                  2**31 + 1, 2**32 - 1, 2**32, 2**32 + 1, 2**63 - 1)
+        # Powers of two and their neighbors include high-rejection intervals,
+        # the uint32/uint64 dispatch boundary, and the largest int64 range.
+        bounds = (1, 2, 3, 7, 8, 9, 15, 16, 17, 255, 256, 257, 725, 2417,
+                  10000, 60000, 2**16 - 1, 2**16, 2**16 + 1,
+                  2**31 - 1, 2**31, 2**31 + 1,
+                  2**32 - 1, 2**32, 2**32 + 1,
+                  2**62 - 1, 2**62, 2**62 + 1, 2**63 - 1, 2**63)
         for bit_type in BITS:
             for bound in bounds:
-                for count in (1, 2, 3, 17, 64):
-                    for advance in (0, 1, 623):
+                for count in (1, 2, 3, 17, 64, 65, 257):
+                    for advance in (0, 1, 2, 623, 624):
                         with self.subTest(bit=bit_type.__name__, bound=bound,
                                           count=count, advance=advance):
                             rng = advanced_generator(bit_type, 20261004, advance)
@@ -109,21 +116,27 @@ class ReplacementStreamTests(unittest.TestCase):
                                                    for _ in range(count)], dtype=np.int64)
                             self.assert_stream(actual, expected, rng, oracle)
 
-    @unittest.skipUnless(np.__version__ == '2.5.2', 'Fast-path dispatch is version-specific')
+    @unittest.skipUnless(np.__version__ in SUPPORTED_NUMPY_VERSIONS,
+                         'Fast-path dispatch is version-specific')
     def test_known_builtin_generators_do_not_take_the_scalar_list_path(self):
         for bit_type in BITS:
             with self.subTest(bit=bit_type.__name__):
-                rng = np.random.Generator(bit_type(9))
+                rng = advanced_generator(bit_type, 9, 2)
+                oracle = copy.deepcopy(rng)
                 original_asarray = np.asarray
                 with patch.object(_native_optimizer.np, 'asarray', wraps=original_asarray) as array:
                     result = _native_optimizer._replacement_indices(rng, 11)
                 list_calls = [call for call in array.call_args_list
                               if isinstance(call.args[0], list)]
                 self.assertEqual(list_calls, [])
-                self.assertEqual(result.shape, (11,))
+                self.assert_stream(result, scalar_indices(oracle, 11), rng, oracle)
 
     def test_other_versions_preserve_the_original_scalar_fallback(self):
-        for version in ('2.5.1', '2.5.3', '2.6.0', '2.5.2+custom', 'unknown'):
+        # Version spoofing checks only exclusion from dispatch. The positive
+        # stream evidence above runs against the installed NumPy implementation.
+        for version in ('2.5.1', '2.5.5', '2.6.0', '2.5.2+custom',
+                        '2.5.3+custom', '2.5.3rc1', '2.5.4+custom',
+                        '2.5.4rc1', '2.5.4.dev0', 'unknown'):
             for bit_type in BITS:
                 with self.subTest(version=version, bit=bit_type.__name__):
                     rng = advanced_generator(bit_type, 27, 1)
@@ -138,16 +151,18 @@ class ReplacementStreamTests(unittest.TestCase):
                     self.assert_stream(actual, scalar_indices(oracle, 13), rng, oracle)
 
     def test_generator_subclass_override_receives_only_scalar_calls(self):
-        rng = AlteredGenerator(np.random.PCG64(5))
-        rng.requests = []
-        oracle = AlteredGenerator(np.random.PCG64(5))
-        oracle.requests = []
-        actual = _native_optimizer._replacement_indices(rng, 13)
-        expected = scalar_indices(oracle, 13)
-        self.assertEqual(rng.requests, [None] * 13)
-        self.assertEqual(actual.tobytes(), expected.tobytes())
-        self.assertEqual(state_bytes(rng), state_bytes(oracle))
-        self.assertTrue(np.all(actual >= 1000))
+        for bit_type in BITS:
+            with self.subTest(bit=bit_type.__name__):
+                rng = AlteredGenerator(bit_type(5))
+                rng.requests = []
+                oracle = AlteredGenerator(bit_type(5))
+                oracle.requests = []
+                actual = _native_optimizer._replacement_indices(rng, 13)
+                expected = scalar_indices(oracle, 13)
+                self.assertEqual(rng.requests, [None] * 13)
+                self.assertEqual(actual.tobytes(), expected.tobytes())
+                self.assertEqual(state_bytes(rng), state_bytes(oracle))
+                self.assertTrue(np.all(actual >= 1000))
 
     def test_bit_generator_subclass_is_not_admitted_by_base_class_membership(self):
         rng = np.random.Generator(DerivedPCG64(7))
@@ -276,7 +291,7 @@ class NativeSamplingIntegrationTests(unittest.TestCase):
         X, y = problem(m)
         for bit_type in BITS:
             for sampling in ('with_replacement', 'shuffle'):
-                for failed_call in (1, m // 2, m, 2 * m + 3):
+                for failed_call in (1, 2, m // 2, m - 1, m, m + 1, 2 * m + 3):
                     with self.subTest(bit=bit_type.__name__, sampling=sampling, fail=failed_call):
                         rng = advanced_generator(bit_type, 191, 3)
                         external = pickle.dumps(rng, protocol=5)
@@ -307,6 +322,14 @@ class NativeSamplingIntegrationTests(unittest.TestCase):
                             self.assertFalse(model.fit_usable_)
                             self.assertFalse(model.cv_eligible_)
                             self.assertEqual(pickle.dumps(model.rng_state_, protocol=5), state_bytes(oracle))
+                            resumed = np.random.Generator(bit_type(0))
+                            resumed.bit_generator.state = copy.deepcopy(model.rng_state_)
+                            continued = copy.deepcopy(oracle)
+                            self.assertEqual(resumed.integers(m, size=17).tobytes(),
+                                             continued.integers(m, size=17).tobytes())
+                            self.assertEqual(resumed.bit_generator.random_raw(5).tobytes(),
+                                             continued.bit_generator.random_raw(5).tobytes())
+                            self.assertEqual(state_bytes(resumed), state_bytes(continued))
                             self.assertEqual(pickle.dumps(rng, protocol=5), external)
                             models.append(model)
                         self.assert_same_fit(*models)

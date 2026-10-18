@@ -56,10 +56,10 @@ def resolve_backend(kind, X, validation, est, deadline, callback):
 
 
 def _replacement_indices(rng, m):
-    # NumPy 2.5.2 uses the same bounded-int64 fill loop for scalar and array
+    # NumPy 2.5.2 through 2.5.4 use the same bounded-int64 fill loop for scalar and array
     # draws. Limit this optimization to the validated built-in implementations;
     # other versions and subclasses retain the original scalar call sequence.
-    if (np.__version__ == "2.5.2"
+    if (np.__version__ in ("2.5.2", "2.5.3", "2.5.4")
             and type(rng) is np.random.Generator
             and type(rng.bit_generator) in (
                 np.random.PCG64, np.random.PCG64DXSM, np.random.Philox,
