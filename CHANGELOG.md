@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.2 - 2026-10-17
 
 - State All Rights Reserved while licensing terms remain undecided, include
   the notice in distributions, and update the dissertation title in citations.

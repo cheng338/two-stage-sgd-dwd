@@ -3,19 +3,34 @@
   "message": "Please cite this software version and Chang Cheng's dissertation, Chapter 3.",
   "type": "software",
   "title": "two-stage-sgd-dwd: Two-Stage DWD via Stochastic Gradient Descent",
-  "version": "0.9.1",
-  "date-released": "2026-10-15",
+  "version": "0.9.2",
+  "date-released": "2026-10-17",
   "authors": [
-    {"family-names": "Cheng", "given-names": "Chang"}
+    {
+      "family-names": "Cheng",
+      "given-names": "Chang"
+    }
   ],
   "abstract": "This package was developed from Chang Cheng's original two-stage SGD-DWD research scripts accompanying his dissertation. It implements the methodology in Chapter 3 using stochastic gradient descent (SGD): projected linear SGD followed by selection using absolute decision scores and RKHS kernel SGD.",
-  "keywords": ["distance-weighted discrimination", "two-stage classification", "kernel methods", "stochastic gradient descent"],
+  "keywords": [
+    "distance-weighted discrimination",
+    "two-stage classification",
+    "kernel methods",
+    "stochastic gradient descent"
+  ],
   "references": [
     {
       "type": "thesis",
       "title": "Ensemble Kernel Distance-Weighted Discrimination and Supervised Nonnegative Matrix Factorization for Classification",
-      "authors": [{"family-names": "Cheng", "given-names": "Chang"}],
-      "institution": {"name": "Purdue University"},
+      "authors": [
+        {
+          "family-names": "Cheng",
+          "given-names": "Chang"
+        }
+      ],
+      "institution": {
+        "name": "Purdue University"
+      },
       "thesis-type": "Doctoral dissertation manuscript",
       "year": 2026,
       "notes": "Chapter 3, Our Earlier Attempt on Kernel DWD."
@@ -23,7 +38,12 @@
     {
       "type": "software",
       "title": "Original DWD Python scripts",
-      "authors": [{"family-names": "Cheng", "given-names": "Chang"}],
+      "authors": [
+        {
+          "family-names": "Cheng",
+          "given-names": "Chang"
+        }
+      ],
       "notes": "2Stage_DWD.py; nonlinearDWD.py; DWDcodebook.py; importdata.py; two_stage_import.py; two_stage_import2.py; 4import.py; KernelDWD.py. Source filenames and SHA256 hashes are recorded in docs/provenance.json."
     }
   ]

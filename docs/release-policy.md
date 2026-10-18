@@ -1,7 +1,7 @@
 # Release policy
 
 Version numbers describe grouped releases, not the number of fixes, commits,
-validation rounds or builds. The current release is **0.9.1**.
+validation rounds or builds. The current release is **0.9.2**.
 
 This policy follows the release practice of Chang Cheng's
 [ensemble-dwd](https://github.com/cheng338/ensemble-dwd/releases) and
