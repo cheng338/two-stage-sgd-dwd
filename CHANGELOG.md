@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.9.3 - 2026-10-23
+
 - Reject complex values hidden in object arrays before real-valued conversion,
   using shared validation for fitting, callable kernels and diagnostics.
 - Recover representable RBF values and existing analytic contrasts when

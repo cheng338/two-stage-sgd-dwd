@@ -763,7 +763,7 @@ manuscript revision. When using the package, cite the dissertation under its
 current title in the [overview](#overview) and the software version:
 
 > Cheng, Chang (2026). *two-stage-sgd-dwd: Two-Stage DWD via Stochastic
-> Gradient Descent*, version 0.9.2 [Computer software].
+> Gradient Descent*, version 0.9.3 [Computer software].
 
 Machine-readable citations are provided in [CITATION.cff](CITATION.cff)
 and [BibTeX format](docs/references.bib). Input filenames and checksums are
