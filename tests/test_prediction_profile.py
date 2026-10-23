@@ -7,6 +7,7 @@ import pickle
 
 import numpy as np
 import pytest
+from _rbf_range_oracles import zero_or_one_kernel
 
 from two_stage_sgd_dwd import KernelSGDDWD, TwoStageDWDClassifier, prediction_profile
 from two_stage_sgd_dwd import _prediction, profiling
@@ -14,7 +15,7 @@ from two_stage_sgd_dwd import _prediction, profiling
 
 def inputs():
     rng = np.random.default_rng(734)
-    return (rng.normal(size=(11, 7)), rng.normal(size=(13, 7)),
+    return (rng.normal(size=(11, 33)), rng.normal(size=(13, 33)),
             rng.normal(size=13), 0.13, 0.2, 4)
 
 
@@ -163,13 +164,27 @@ def test_arithmetic_retry_counts_successful_recomputation(monkeypatch):
 
 
 @pytest.mark.parametrize("backend", ["direct", "blas"])
-@pytest.mark.parametrize("kind", ["validation", "numerical"])
-def test_failed_calls_keep_same_error_and_partial_work(backend, kind):
+@pytest.mark.parametrize("kind", ["validation", "finite_range"])
+def test_range_recovery_and_invalid_call_profiling(backend, kind):
     args = list(inputs())
     if kind == "validation":
         args[4] = -1.0
     else:
         args[4] = 1e308
+        expected_kernel = zero_or_one_kernel(args[0], args[1], args[4])
+        np.testing.assert_array_equal(expected_kernel, np.zeros_like(expected_kernel))
+        expected = np.full(len(args[0]), args[3])
+        assert predict(backend, args).tobytes() == expected.tobytes()
+        with prediction_profile() as records:
+            actual = predict(backend, args)
+        assert actual.tobytes() == expected.tobytes()
+        assert len(records) == 1
+        check_record(records[0])
+        assert records[0]["blocks_completed"] == 3
+        assert records[0]["rows_completed"] == 11
+        assert profiling._active_call.get() is None
+        assert profiling._active_profile.get() is None
+        return
     with pytest.raises((ValueError, FloatingPointError)) as expected:
         predict(backend, args)
     with prediction_profile() as records:
@@ -178,7 +193,7 @@ def test_failed_calls_keep_same_error_and_partial_work(backend, kind):
     record = records[0]
     assert record["status"] == "failed"
     assert record["error_type"] == type(expected.value).__name__
-    assert record["blocks_started"] == int(kind == "numerical")
+    assert record["blocks_started"] == 0
     assert record["blocks_completed"] == record["rows_completed"] == 0
     assert profiling._active_call.get() is None
     assert profiling._active_profile.get() is None

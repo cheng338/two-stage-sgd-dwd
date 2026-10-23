@@ -36,7 +36,7 @@ ROUTES = (
 )
 
 
-def data(constant=False):
+def data(constant=False, n_features=3):
     x = np.linspace(0.1, 1.5, 12)
     X = np.column_stack((x, 0.2 + x * x / 4, 0.1 + x / 3))
     if constant:
@@ -45,13 +45,19 @@ def data(constant=False):
     query = np.column_stack((np.linspace(0.13, 1.61, 11),
                              np.linspace(0.25, 0.76, 11),
                              np.linspace(0.16, 0.61, 11)))
+    # Zero padding retains the original geometry while exercising a feature
+    # count outside the small direct-execution regime of the BLAS backend.
+    if n_features > 3:
+        X = np.pad(X, ((0, 0), (0, n_features - 3)))
+        query = np.pad(query, ((0, 0), (0, n_features - 3)))
     labels = np.array(["lower"] * 5 + ["upper"] * 6)
     return X, y, query, labels
 
 
-def fitted(settings=None):
+def fitted(settings=None, n_features=3):
     settings = {} if settings is None else settings
-    X, y, query, labels = data(settings.get("kernel") == "additive_chi2")
+    X, y, query, labels = data(
+        settings.get("kernel") == "additive_chi2", n_features=n_features)
     controls = dict(retention_fraction=1.0, lambd=0.03, gamma=0.4,
                     max_epochs=3, stopping="fixed", random_state=29,
                     prediction_batch_size=16, optimizer_backend="python")
@@ -93,7 +99,13 @@ def observed_blocks(monkeypatch, model, before_block=None):
 
     with monkeypatch.context() as patch:
         if child._kernel_spec_.kernel == "rbf" and child.gamma_ > 0:
-            if getattr(model, "prediction_backend", "direct") == "blas":
+            # These fixtures have eleven query rows and at most twelve basis
+            # rows. The three-feature BLAS fixture must execute directly; its
+            # 33-feature counterpart must start each block with norm/dot work.
+            # Observe the required route, so an accidental dispatch change
+            # fails the block assertions rather than adapting this observer.
+            if (getattr(model, "prediction_backend", "direct") == "blas"
+                    and child.n_features_in_ == 33):
                 original = _prediction.np.matmul
 
                 def multiply(left, right, *args, **kwargs):
@@ -109,6 +121,11 @@ def observed_blocks(monkeypatch, model, before_block=None):
                     return original(left, right, *args, **kwargs)
 
                 patch.setattr(_prediction, "cdist", distances)
+
+                def unexpected_multiply(*args, **kwargs):
+                    raise AssertionError("Direct prediction block used norm/dot work")
+
+                patch.setattr(_prediction.np, "matmul", unexpected_multiply)
         else:
             original = _estimators._kernel_values
 
@@ -122,9 +139,10 @@ def observed_blocks(monkeypatch, model, before_block=None):
 
 @pytest.mark.parametrize("route,settings", ROUTES, ids=[row[0] for row in ROUTES])
 @pytest.mark.parametrize("size", [1, 3, np.int64(4), 100])
+@pytest.mark.parametrize("n_features", [3, 33], ids=["small-direct", "large-blas"])
 def test_post_fit_parent_size_reaches_real_blocks_and_public_readouts(
-        route, settings, size, monkeypatch):
-    model, query, labels = fitted(settings)
+        route, settings, size, n_features, monkeypatch):
+    model, query, labels = fitted(settings, n_features=n_features)
     child_before = pickle.dumps(model.kernel_estimator_)
     model.set_params(prediction_batch_size=size)
     model_before = pickle.dumps(model)
@@ -149,8 +167,10 @@ def test_post_fit_parent_size_reaches_real_blocks_and_public_readouts(
 @pytest.mark.parametrize("invalid", [None, 0, -1, -256, 1.0, 1.5,
                                       True, False, np.bool_(True), np.nan,
                                       np.inf, "3"])
-def test_invalid_parent_sizes_reject_without_dispatch_and_recover(invalid, monkeypatch):
-    model, query, labels = fitted()
+@pytest.mark.parametrize("n_features", [3, 33], ids=["small-direct", "large-blas"])
+def test_invalid_parent_sizes_reject_without_dispatch_and_recover(
+        invalid, n_features, monkeypatch):
+    model, query, labels = fitted(n_features=n_features)
     child_before = pickle.dumps(model.kernel_estimator_)
     model.set_params(prediction_batch_size=invalid)
     model_before = pickle.dumps(model)
@@ -179,9 +199,11 @@ def test_invalid_parent_sizes_reject_without_dispatch_and_recover(invalid, monke
 @pytest.mark.parametrize("backend", ["direct", "blas"])
 @pytest.mark.parametrize("error_type", [RuntimeError, FloatingPointError,
                                         KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("n_features", [3, 33], ids=["small-direct", "large-blas"])
 def test_failed_numerical_call_preserves_exact_error_and_fitted_state(
-        backend, error_type, monkeypatch):
-    model, query, labels = fitted(dict(prediction_backend=backend))
+        backend, error_type, n_features, monkeypatch):
+    model, query, labels = fitted(dict(prediction_backend=backend),
+                                  n_features=n_features)
     model.set_params(prediction_batch_size=3)
     model_before = pickle.dumps(model)
     child_before = pickle.dumps(model.kernel_estimator_)

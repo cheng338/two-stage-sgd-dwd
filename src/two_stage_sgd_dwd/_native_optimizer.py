@@ -2,12 +2,14 @@
 
 Only one epoch of draws and step sizes is prepared at a time. This module
 never prepares a Gram matrix and never changes a native failure into a Python
-retry. The default estimator backend remains Python.
+retry. Automatic selection falls back to Python for unsupported configurations.
 """
 from __future__ import annotations
 
 import copy
 import importlib
+import math
+import re
 import time
 
 import numpy as np
@@ -56,16 +58,24 @@ def resolve_backend(kind, X, validation, est, deadline, callback):
 
 
 def _replacement_indices(rng, m):
-    # NumPy 2.5.2 through 2.5.4 use the same bounded-int64 fill loop for scalar and array
-    # draws. Limit this optimization to the validated built-in implementations;
-    # other versions and subclasses retain the original scalar call sequence.
-    if (np.__version__ in ("2.5.2", "2.5.3", "2.5.4")
+    # Scalar/array stream and complete-state parity are qualified on 2.5.2--2.5.4.
+    # Later stable releases are eligible by forward-compatibility policy, not
+    # by an advance guarantee of NumPy's implementation. Retain type safeguards.
+    if (_rng_version_eligible(np.__version__)
             and type(rng) is np.random.Generator
             and type(rng.bit_generator) in (
                 np.random.PCG64, np.random.PCG64DXSM, np.random.Philox,
                 np.random.SFC64, np.random.MT19937)):
         return rng.integers(m, size=m, dtype=np.int64)
     return np.asarray([int(rng.integers(m)) for _ in range(m)], dtype=np.int64)
+
+
+def _rng_version_eligible(version):
+    """Admit stable NumPy >=2.5.2 under the RNG compatibility policy."""
+    if not isinstance(version, str):
+        return False
+    match = re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version)
+    return match is not None and tuple(int(part) for part in match.groups()) >= (2, 5, 2)
 
 
 def _prevalidated_rbf_loader(X, rng, est, helpers):
@@ -88,6 +98,24 @@ def _prevalidated_rbf_loader(X, rng, est, helpers):
             or not np.isfinite(gamma) or gamma <= 0):
         return None
     return make_rbf_column_loader(X, gamma)
+
+
+def _epoch_rates(native, B, updates, m):
+    """Prepare the existing scalar schedule without changing its arithmetic."""
+    fill_rates = getattr(native, "fill_rates", None)
+    # Exactly represented integer operands retain Python's division rounding.
+    # Keep the original expression for older extensions, unusual scalar types,
+    # empty epochs, and counters beyond the exact binary64 integer range.
+    if (fill_rates is not None and type(B) is float
+            and type(updates) is int and type(m) is int
+            and 0 <= updates < 2**53 and 1 <= m < 2**53
+            and updates + m - 1 < 2**53
+            and math.isfinite(B) and B > 0.0 and math.isfinite(1.0 / B)):
+        rates = np.empty(m, dtype=np.float64)
+        fill_rates(rates, updates, m, B)
+        return rates
+    return np.asarray([(1.0 / B) * (1.0 + (updates + j) / m) ** (-0.75)
+                       for j in range(m)], dtype=np.float64)
 
 
 def optimize(kind, X, y, rng, est, native, column_cache=None):
@@ -136,9 +164,12 @@ def optimize(kind, X, y, rng, est, native, column_cache=None):
             if not hit:
                 kernel_counter[0] += m
             return values
-    # These NumPy getters already return independent state dictionaries/arrays.
+    # Owned getter states are qualified on NumPy 2.5.2, 2.5.3, and 2.5.4.
+    # Later stable releases are eligible by forward-compatibility policy;
+    # ownership is validated separately from scalar/array stream equivalence.
     independent_epoch_state = (
-        np.__version__ == "2.5.2" and type(rng) is np.random.Generator
+        _rng_version_eligible(np.__version__)
+        and type(rng) is np.random.Generator
         and type(rng.bit_generator) in (np.random.PCG64, np.random.PCG64DXSM,
                                        np.random.Philox, np.random.SFC64, np.random.MT19937))
     updates = 0
@@ -154,8 +185,7 @@ def optimize(kind, X, y, rng, est, native, column_cache=None):
                 indices = np.asarray(rng.permutation(m), dtype=np.int64)
             else:
                 indices = _replacement_indices(rng, m)
-            rates = np.asarray([(1.0 / B) * (1.0 + (updates + j) / m) ** (-0.75)
-                                for j in range(m)], dtype=np.float64)
+            rates = _epoch_rates(native, B, updates, m)
             coefficients, intercept, completed, error = native.run_steps(
                 0 if kind == "linear" else 1, coefficients, intercept, get_row,
                 y, indices, rates, 0.0 if kind == "linear" else est.lambd_)

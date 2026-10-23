@@ -17,6 +17,8 @@ except (ImportError, OSError):
 
 BITS = (np.random.PCG64, np.random.PCG64DXSM, np.random.Philox,
         np.random.SFC64, np.random.MT19937)
+DISPATCH_NUMPY_VERSIONS = ("2.5.2", "2.5.3", "2.5.4", "2.5.5", "2.6.0", "3.0.0")
+INSTALLED_NUMPY_ELIGIBLE = _native_optimizer._rng_version_eligible(np.__version__)
 requires_native = unittest.skipIf(_sgd_accel is None, "Optional compiled extension unavailable")
 
 
@@ -60,32 +62,41 @@ class EpochStateTests(ExactAssertions):
             elif isinstance(item, (int, np.integer)):
                 value[key] = 0
 
-    @unittest.skipUnless(np.__version__ == "2.5.2", "Getter proof is specific to NumPy 2.5.2")
+    @unittest.skipUnless(INSTALLED_NUMPY_ELIGIBLE,
+                         "Getter proof requires an actual eligible stable NumPy release")
     def test_builtin_getters_own_nested_state_and_arrays(self):
         for bit_type in BITS:
-            with self.subTest(bit=bit_type.__name__):
-                rng = np.random.Generator(bit_type(195))
-                rng.integers(17, size=3)
-                rng.random(5)
-                rng.bit_generator.random_raw(2)
-                first, second = rng.bit_generator.state, rng.bit_generator.state
-                self.assertExact(first, second)
-                self.assert_independent_storage(first, second)
-                first_before, second_before = state_bytes(first), state_bytes(second)
-                rng.bit_generator.random_raw(31)
-                rng.integers(57, size=9)
-                self.assertEqual(state_bytes(first), first_before)
-                current = state_bytes(rng.bit_generator.state)
-                self.mutate_snapshot(first)
-                self.assertEqual(state_bytes(second), second_before)
-                self.assertEqual(state_bytes(rng.bit_generator.state), current)
-                rng.bit_generator.state = second
-                self.assertExact(rng.bit_generator.state, second)
-                rng.bit_generator.random_raw(13)
-                self.assertEqual(state_bytes(second), second_before)
-                current = state_bytes(rng.bit_generator.state)
-                self.mutate_snapshot(second)
-                self.assertEqual(state_bytes(rng.bit_generator.state), current)
+            for seed in (0, 195):
+                for advance in (0, 1, 2, 623, 624):
+                    for mixed in (False, True):
+                        with self.subTest(bit=bit_type.__name__, seed=seed,
+                                          advance=advance, mixed=mixed):
+                            rng = np.random.Generator(bit_type(seed))
+                            # Raw positions exercise block/MT boundaries; mixed
+                            # draws also retain partially used 32-bit caches.
+                            rng.bit_generator.random_raw(advance)
+                            if mixed:
+                                rng.integers(17, size=3)
+                                rng.random(5)
+                                rng.bit_generator.random_raw(2)
+                            first, second = rng.bit_generator.state, rng.bit_generator.state
+                            self.assertExact(first, second)
+                            self.assert_independent_storage(first, second)
+                            first_before, second_before = state_bytes(first), state_bytes(second)
+                            rng.bit_generator.random_raw(31)
+                            rng.integers(57, size=9)
+                            self.assertEqual(state_bytes(first), first_before)
+                            current = state_bytes(rng.bit_generator.state)
+                            self.mutate_snapshot(first)
+                            self.assertEqual(state_bytes(second), second_before)
+                            self.assertEqual(state_bytes(rng.bit_generator.state), current)
+                            rng.bit_generator.state = second
+                            self.assertExact(rng.bit_generator.state, second)
+                            rng.bit_generator.random_raw(13)
+                            self.assertEqual(state_bytes(second), second_before)
+                            current = state_bytes(rng.bit_generator.state)
+                            self.mutate_snapshot(second)
+                            self.assertEqual(state_bytes(rng.bit_generator.state), current)
 
     def run_copy_probe(self, rng, version, expected_epoch_copies):
         original_copy = copy.deepcopy
@@ -111,18 +122,33 @@ class EpochStateTests(ExactAssertions):
         self.assertEqual(len(requests), 3)
 
     def test_other_versions_and_generator_subclasses_keep_each_epoch_copy(self):
-        for version in ("2.5.1", "2.5.3", "2.5.4", "2.5.2+custom"):
+        for version in ("1.26.4", "2.4.9", "2.5.1", "2.5.2+custom",
+                        "2.5.3+custom", "2.5.4+custom", "2.5.3rc1",
+                        "2.5.3.dev0", "3.0.0rc1", "3.0.0+custom",
+                        "2.5", "2.5.3.0", "02.5.3", "2.5.3\n", "unknown", None):
             with self.subTest(version=version):
                 self.run_copy_probe(np.random.Generator(np.random.PCG64(44)), version, 3)
-        self.run_copy_probe(GeneratorSubclass(np.random.PCG64(44)), "2.5.2", 3)
+        for version in DISPATCH_NUMPY_VERSIONS:
+            with self.subTest(version=version, generator="subclass"):
+                self.run_copy_probe(GeneratorSubclass(np.random.PCG64(44)), version, 3)
+
+    def test_admitted_versions_dispatch_only_for_known_builtin_states(self):
+        # Mocked version strings test dispatch only. The ownership proof above
+        # runs on the installed NumPy implementation without version spoofing.
+        for version in DISPATCH_NUMPY_VERSIONS:
+            for bit_type in BITS:
+                with self.subTest(version=version, bit=bit_type.__name__):
+                    self.run_copy_probe(np.random.Generator(bit_type(44)), version, 0)
 
     def test_bit_generator_subclass_keeps_copies_and_reads_state_each_epoch(self):
-        bit = ObservedPCG64(44)
-        bit.observed = []
-        self.run_copy_probe(np.random.Generator(bit), "2.5.2", 3)
-        self.assertEqual(len(bit.observed), 4)  # Three epochs plus returned state.
-        self.assertEqual(len({id(state) for state in bit.observed}), 4)
-        self.assertEqual(len({state_bytes(state) for state in bit.observed}), 4)
+        for version in DISPATCH_NUMPY_VERSIONS:
+            with self.subTest(version=version):
+                bit = ObservedPCG64(44)
+                bit.observed = []
+                self.run_copy_probe(np.random.Generator(bit), version, 3)
+                self.assertEqual(len(bit.observed), 4)  # Three epochs plus returned state.
+                self.assertEqual(len({id(state) for state in bit.observed}), 4)
+                self.assertEqual(len({state_bytes(state) for state in bit.observed}), 4)
 
     def test_mutable_custom_getter_cannot_overwrite_the_rollback_snapshot(self):
         class SharedStatePCG64(np.random.PCG64):
@@ -154,11 +180,12 @@ class EpochStateTests(ExactAssertions):
         self.assertExact(result["rng_state_"], expected.bit_generator.state)
         self.assertExact(rng.integers(3, size=11), expected.integers(3, size=11))
 
-    @unittest.skipUnless(np.__version__ == "2.5.2", "Optimized getter path is version-specific")
+    @unittest.skipUnless(INSTALLED_NUMPY_ELIGIBLE,
+                         "Optimized getter path requires an eligible stable NumPy release")
     def test_all_supported_builtin_states_skip_only_epoch_deepcopies(self):
         for bit_type in BITS:
             with self.subTest(bit=bit_type.__name__):
-                self.run_copy_probe(np.random.Generator(bit_type(44)), "2.5.2", 0)
+                self.run_copy_probe(np.random.Generator(bit_type(44)), np.__version__, 0)
 
 
 @requires_native

@@ -27,8 +27,8 @@ def make_rbf_column_loader(X, gamma):
         # Keep rbf_kernel's m-by-1 cdist orientation and arithmetic verbatim.
         with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
             distances = _core.cdist(left, left[index:index + 1], metric="sqeuclidean")
-            _core._finite_result(distances, "squared Euclidean distances")
-            distances *= -width
+            _core._scale_rbf_distances(distances, left, left[index:index + 1], width,
+                                       trusted=_core.cdist is _core._ORIGINAL_CDIST)
             result = np.exp(distances, out=distances)
         _core._finite_result(result, "RBF kernel")
         return result[:, 0]

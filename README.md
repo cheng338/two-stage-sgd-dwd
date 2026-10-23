@@ -44,7 +44,7 @@ Conda or a particular BLAS vendor.
 The compiled scalar optimizer is optional. A compatible native wheel includes
 it; a source build needs a suitable C compiler to build it. Setting the build
 environment variable `SGD_BUILD_ACCEL=0` requests a portable Python-only build.
-The Python backend remains the default in either distribution. Native binary
+Automatic backend selection is the default in either distribution. Native binary
 availability depends on the operating system and architecture; see
 [backend and cache details](docs/optimizer-backends.md).
 Native builds use the Python 3.11 stable ABI (`cp311-abi3`) for standard
@@ -115,6 +115,10 @@ their convergence flags unchanged and is never called implicitly by `fit()`.
 
 Kernel diagnostics make two blocked kernel passes, adding work comparable to
 an explicit objective evaluation. Record this time separately from fitting.
+The kernel report's `kernel_matrix_product_uncertainty` field describes
+possible cancellation in its matrix-vector products and quadratic components.
+These conservative risk indicators do not correct the reported values or
+certify their accuracy; an unflagged result can still be inaccurate.
 Original fitting labels and linear training rows cannot all be checked from
 stored estimator metadata. See [the diagnostic contract](docs/method.md#optional-post-fit-optimization-diagnostics)
 for input requirements, numerical limits and failure behavior.
@@ -141,7 +145,10 @@ ensemble package's starting value. The fitted value is `lambd_`.
 The retention default is **0.3 (30%)**, also matching `ensemble-dwd`.
 The retained count is `floor(retention_fraction * N)`, where `N` is the
 number of training observations. For example, 30% of 101 observations
-retains 30. Ranking remains global by absolute linear score, with the same
+retains 30. Multiplication uses binary64 floating-point arithmetic before
+rounding down: `0.29 * 100` is slightly below 29 and therefore retains 28.
+No epsilon or exact-decimal adjustment is applied. Ranking remains global by
+absolute linear score, with the same
 random-key and observation-ID tie breaking. The count is not enlarged to
 supply a minimum number of rows or both classes.
 The original Chapter 3 choice of 5% remains available through an explicit
@@ -465,9 +472,12 @@ fewer parameter updates per epoch, so equal epochs do not imply equal progress.
 
 In a two-stage fit, each stage uses its actual data size and the requested
 batch policy. The optimizer's `batch_size` is separate from
-`prediction_batch_size`, which only controls kernel scoring memory. Full-batch
-kernel updates use bounded scoring blocks with frozen parameters and retain
-no full Gram cache. An interrupted batch is not partially committed.
+`prediction_batch_size`, which bounds kernel scoring blocks. During fitting,
+changing this block size can change floating-point reduction order, update
+values and the fitted result, even though the mathematical batch update is
+unchanged. Full-batch kernel updates use bounded scoring blocks with frozen
+parameters and retain no full Gram cache. An interrupted batch is not partially
+committed.
 Changing a fitted `TwoStageDWDClassifier` with
 `set_params(prediction_batch_size=...)` controls subsequent prediction blocks
 without refitting or changing its fitted kernel child's parameter. The size
@@ -560,7 +570,7 @@ and passes no fit metadata.
 
 # Optimizer backends and lazy kernel columns
 
-All three estimators accept `optimizer_backend="python"` by default.
+All three estimators use `optimizer_backend="auto"` by default.
 `"auto"` selects the optional compiled scalar optimizer when supported and
 otherwise uses Python. `"native"` requires the compiled optimizer: unsupported
 fitting controls raise `ValueError`, and an unavailable extension raises

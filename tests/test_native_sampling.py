@@ -1,7 +1,7 @@
 """Exact replacement streams, guarded dispatch, and native failed-prefix parity.
 
-These are implementation checks for the explicitly supported NumPy versions,
-not a claim that NumPy guarantees scalar/array stream equivalence in general.
+Stream checks use the installed NumPy implementation; mocked future versions
+check dispatch policy only, not future scalar/array stream equivalence.
 """
 import copy
 import pickle
@@ -22,7 +22,8 @@ except (ImportError, OSError):
 
 BITS = (np.random.PCG64, np.random.PCG64DXSM, np.random.Philox,
         np.random.SFC64, np.random.MT19937)
-SUPPORTED_NUMPY_VERSIONS = ('2.5.2', '2.5.3', '2.5.4')
+DISPATCH_NUMPY_VERSIONS = ('2.5.2', '2.5.3', '2.5.4', '2.5.5', '2.6.0', '3.0.0')
+INSTALLED_NUMPY_ELIGIBLE = _native_optimizer._rng_version_eligible(np.__version__)
 requires_native = unittest.skipIf(_sgd_accel is None, "Optional compiled extension unavailable")
 
 
@@ -91,8 +92,8 @@ class ReplacementStreamTests(unittest.TestCase):
                                 expected = scalar_indices(oracle, m)
                                 self.assert_stream(actual, expected, rng, oracle)
 
-    @unittest.skipUnless(np.__version__ in SUPPORTED_NUMPY_VERSIONS,
-                         'Scalar/array evidence requires an actual supported NumPy release')
+    @unittest.skipUnless(INSTALLED_NUMPY_ELIGIBLE,
+                         'Scalar/array evidence requires an actual eligible stable NumPy release')
     def test_wide_bounds_use_small_independent_draw_counts(self):
         # The helper's bound equals its length. Probe huge bounds directly so
         # these dependency checks never attempt enormous helper allocations.
@@ -116,8 +117,8 @@ class ReplacementStreamTests(unittest.TestCase):
                                                    for _ in range(count)], dtype=np.int64)
                             self.assert_stream(actual, expected, rng, oracle)
 
-    @unittest.skipUnless(np.__version__ in SUPPORTED_NUMPY_VERSIONS,
-                         'Fast-path dispatch is version-specific')
+    @unittest.skipUnless(INSTALLED_NUMPY_ELIGIBLE,
+                         'Fast-path dispatch requires an eligible stable NumPy release')
     def test_known_builtin_generators_do_not_take_the_scalar_list_path(self):
         for bit_type in BITS:
             with self.subTest(bit=bit_type.__name__):
@@ -131,12 +132,33 @@ class ReplacementStreamTests(unittest.TestCase):
                 self.assertEqual(list_calls, [])
                 self.assert_stream(result, scalar_indices(oracle, 11), rng, oracle)
 
+    def test_mocked_admitted_versions_route_to_sized_builtin_draws(self):
+        # These strings verify the forward-compatibility policy only. Neither
+        # they nor the sized-call oracle simulate a future NumPy implementation.
+        # Scalar equivalence is checked separately against actual installations.
+        for version in DISPATCH_NUMPY_VERSIONS:
+            for bit_type in BITS:
+                with self.subTest(version=version, bit=bit_type.__name__):
+                    rng = advanced_generator(bit_type, 27, 1)
+                    oracle = copy.deepcopy(rng)
+                    expected = oracle.integers(13, size=13, dtype=np.int64)
+                    original_asarray = np.asarray
+                    with patch.object(_native_optimizer.np, '__version__', version), \
+                            patch.object(_native_optimizer.np, 'asarray', wraps=original_asarray) as array:
+                        actual = _native_optimizer._replacement_indices(rng, 13)
+                    list_calls = [call for call in array.call_args_list
+                                  if isinstance(call.args[0], list)]
+                    self.assertEqual(list_calls, [])
+                    self.assert_stream(actual, expected, rng, oracle)
+
     def test_other_versions_preserve_the_original_scalar_fallback(self):
         # Version spoofing checks only exclusion from dispatch. The positive
         # stream evidence above runs against the installed NumPy implementation.
-        for version in ('2.5.1', '2.5.5', '2.6.0', '2.5.2+custom',
+        for version in ('1.26.4', '2.4.9', '2.5.1', '2.5.2+custom',
                         '2.5.3+custom', '2.5.3rc1', '2.5.4+custom',
-                        '2.5.4rc1', '2.5.4.dev0', 'unknown'):
+                        '2.5.4rc1', '2.5.4.dev0', '2.5.5rc1',
+                        '2.6.0.dev0', '3.0.0rc1', '3.0.0+custom',
+                        '2.5', '2.5.3.0', '02.5.3', '2.5.3\n', 'unknown', None):
             for bit_type in BITS:
                 with self.subTest(version=version, bit=bit_type.__name__):
                     rng = advanced_generator(bit_type, 27, 1)
@@ -151,33 +173,38 @@ class ReplacementStreamTests(unittest.TestCase):
                     self.assert_stream(actual, scalar_indices(oracle, 13), rng, oracle)
 
     def test_generator_subclass_override_receives_only_scalar_calls(self):
-        for bit_type in BITS:
-            with self.subTest(bit=bit_type.__name__):
-                rng = AlteredGenerator(bit_type(5))
-                rng.requests = []
-                oracle = AlteredGenerator(bit_type(5))
-                oracle.requests = []
-                actual = _native_optimizer._replacement_indices(rng, 13)
-                expected = scalar_indices(oracle, 13)
-                self.assertEqual(rng.requests, [None] * 13)
-                self.assertEqual(actual.tobytes(), expected.tobytes())
-                self.assertEqual(state_bytes(rng), state_bytes(oracle))
-                self.assertTrue(np.all(actual >= 1000))
+        for version in DISPATCH_NUMPY_VERSIONS:
+            for bit_type in BITS:
+                with self.subTest(version=version, bit=bit_type.__name__):
+                    rng = AlteredGenerator(bit_type(5))
+                    rng.requests = []
+                    oracle = AlteredGenerator(bit_type(5))
+                    oracle.requests = []
+                    with patch.object(_native_optimizer.np, '__version__', version):
+                        actual = _native_optimizer._replacement_indices(rng, 13)
+                    expected = scalar_indices(oracle, 13)
+                    self.assertEqual(rng.requests, [None] * 13)
+                    self.assertEqual(actual.tobytes(), expected.tobytes())
+                    self.assertEqual(state_bytes(rng), state_bytes(oracle))
+                    self.assertTrue(np.all(actual >= 1000))
 
     def test_bit_generator_subclass_is_not_admitted_by_base_class_membership(self):
-        rng = np.random.Generator(DerivedPCG64(7))
-        # NumPy 1 pickles custom bit generators by registry name. This helper
-        # never copies the generator, so construct its oracle independently.
-        oracle = np.random.Generator(DerivedPCG64(7))
-        self.assertIs(type(oracle), type(rng))
-        self.assertIs(type(oracle.bit_generator), type(rng.bit_generator))
-        self.assertEqual(state_bytes(oracle), state_bytes(rng))
-        original_asarray = np.asarray
-        with patch.object(_native_optimizer.np, 'asarray', wraps=original_asarray) as array:
-            actual = _native_optimizer._replacement_indices(rng, 17)
-        list_calls = [call for call in array.call_args_list if isinstance(call.args[0], list)]
-        self.assertEqual(len(list_calls), 1)
-        self.assert_stream(actual, scalar_indices(oracle, 17), rng, oracle)
+        for version in DISPATCH_NUMPY_VERSIONS:
+            with self.subTest(version=version):
+                rng = np.random.Generator(DerivedPCG64(7))
+                # NumPy 1 pickles custom bit generators by registry name. This
+                # helper never copies it, so construct its oracle independently.
+                oracle = np.random.Generator(DerivedPCG64(7))
+                self.assertIs(type(oracle), type(rng))
+                self.assertIs(type(oracle.bit_generator), type(rng.bit_generator))
+                self.assertEqual(state_bytes(oracle), state_bytes(rng))
+                original_asarray = np.asarray
+                with patch.object(_native_optimizer.np, '__version__', version), \
+                        patch.object(_native_optimizer.np, 'asarray', wraps=original_asarray) as array:
+                    actual = _native_optimizer._replacement_indices(rng, 17)
+                list_calls = [call for call in array.call_args_list if isinstance(call.args[0], list)]
+                self.assertEqual(len(list_calls), 1)
+                self.assert_stream(actual, scalar_indices(oracle, 17), rng, oracle)
 
     def test_custom_generator_protocol_preserves_scalar_override(self):
         class ScalarOnly:
@@ -190,14 +217,19 @@ class ReplacementStreamTests(unittest.TestCase):
                     raise AssertionError('Custom generator must not receive a sized request')
                 return len(self.calls) % high
 
-        rng = ScalarOnly()
-        actual = _native_optimizer._replacement_indices(rng, 5)
-        self.assertEqual(actual.tolist(), [1, 2, 3, 4, 0])
-        self.assertEqual(rng.calls, [(5, (), {})] * 5)
+        for version in DISPATCH_NUMPY_VERSIONS:
+            with self.subTest(version=version):
+                rng = ScalarOnly()
+                with patch.object(_native_optimizer.np, '__version__', version):
+                    actual = _native_optimizer._replacement_indices(rng, 5)
+                self.assertEqual(actual.tolist(), [1, 2, 3, 4, 0])
+                self.assertEqual(rng.calls, [(5, (), {})] * 5)
 
 
 class NativeSamplingIntegrationTests(unittest.TestCase):
     def assert_same_fit(self, a, b):
+        self.assertEqual(a.optimizer_backend_, 'python')
+        self.assertEqual(b.optimizer_backend_, 'native')
         for name in ('initial_state_', 'final_state_', 'selected_state_', 'rng_state_',
                      'selected_iteration_', 'n_updates_', 'n_samples_seen_',
                      'learning_rate_B_', 'stop_reason_', 'model_status_',
@@ -258,7 +290,7 @@ class NativeSamplingIntegrationTests(unittest.TestCase):
                                 options['kernel_cache_bytes'] = capacity
                             if constructor is TwoStageDWDClassifier:
                                 options['retention_fraction'] = .8
-                            baseline = constructor(**options).fit(X, y)
+                            baseline = constructor(optimizer_backend='python', **options).fit(X, y)
                             native = constructor(optimizer_backend='native', **options).fit(X, y)
                             pairs = [(baseline, native)]
                             if constructor is TwoStageDWDClassifier:
@@ -367,7 +399,7 @@ class NativeSamplingIntegrationTests(unittest.TestCase):
     @requires_native
     def test_fallback_version_preserves_native_fit(self):
         X, y = problem(14)
-        expected = KernelSGDDWD(max_epochs=3, random_state=28).fit(X, y)
+        expected = KernelSGDDWD(max_epochs=3, random_state=28, optimizer_backend='python').fit(X, y)
         with patch.object(_native_optimizer.np, '__version__', 'unvalidated-version'):
             actual = KernelSGDDWD(max_epochs=3, random_state=28,
                                   optimizer_backend='native').fit(X, y)

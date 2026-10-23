@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose, assert_array_equal
+from _rbf_range_oracles import zero_or_one_kernel
 
 from two_stage_sgd_dwd._core import (
     dwd_loss,
@@ -245,5 +246,7 @@ def test_core_validates_shapes_labels_indices_and_nonfinite_calculations():
         select_near_boundary([0, 0], 0.5, np.random.default_rng(1), [1, 1])
     with pytest.raises(FloatingPointError):
         linear_step([1e308], 0, [1e308], 1, 0.1)
-    with pytest.raises(FloatingPointError):
-        rbf_kernel([[1e308]], [[-1e308]], 1)
+    # Both inputs are finite; the exact Gaussian rounds to zero even though
+    # forming its squared distance directly exceeds binary64 range.
+    assert_array_equal(rbf_kernel([[1e308]], [[-1e308]], 1),
+                       zero_or_one_kernel([[1e308]], [[-1e308]], 1))

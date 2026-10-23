@@ -272,6 +272,8 @@ class NativeKernelFinitePassTests(unittest.TestCase):
             _sgd_accel.run_steps(1, initial, .1, MockStructuralLoader(), labels, indices, rates, .2)
 
     def assert_same_state(self, first, second):
+        self.assertEqual(first.optimizer_backend_, 'python')
+        self.assertEqual(second.optimizer_backend_, 'native')
         for name in ('initial_state_', 'final_state_', 'selected_state_', 'rng_state_',
                      'n_updates_', 'n_samples_seen_', 'learning_rate_B_', 'model_status_',
                      'stop_reason_', 'fit_usable_', 'cv_eligible_', 'kernel_evaluation_count_',
@@ -295,7 +297,7 @@ class NativeKernelFinitePassTests(unittest.TestCase):
                                         kernel_cache_bytes=cache)
                         if constructor is TwoStageDWDClassifier:
                             settings['retention_fraction'] = .8
-                        reference = constructor(**settings).fit(X, y)
+                        reference = constructor(optimizer_backend='python', **settings).fit(X, y)
                         native = constructor(optimizer_backend='native', **settings).fit(X, y)
                         stages = [(reference, native)]
                         if constructor is TwoStageDWDClassifier:

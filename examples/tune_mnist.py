@@ -30,7 +30,8 @@ from two_stage_sgd_dwd import mnist_param_grid
 from two_stage_sgd_dwd.datasets import load_mnist_pair
 from _adaptive_grid import (AdaptiveSearchConfig, candidate_key, next_search_stage,
                             ordered_eligible, POLICY_STATE_SCHEMA_VERSION,
-                            fold_accuracy, record_score, score_token)
+                            fold_accuracy, record_score, score_token, valid_record,
+                            _record_rank_key)
 from _mnist_cv import FoldEvaluator, execution_identity
 
 
@@ -41,6 +42,28 @@ _FOLD_SCHEMA_VERSION = 1
 _fold_parameters = FoldEvaluator._parameters
 _CONTROL_STAGE = 'inherited-default-control'
 _CONTROL_PARAMS = {'kernel': 'rbf', 'lambd': 1e-6, 'gamma': 'scale', 'retention_fraction': .3}
+
+
+class _ProgressLeader:
+    """Reporting-only leader of immutable completed records, rebuilt on resume.
+
+    Stage decisions and final selection retain the authoritative full ranking.
+    This cache is never persisted or consulted by the adaptive search policy.
+    """
+    def __init__(self, records, *, expected_folds):
+        self.best = None
+        self._key = None
+        self._expected_folds = expected_folds
+        for record in records:
+            self.add(record)
+
+    def add(self, record):
+        if valid_record(record, expected_folds=self._expected_folds):
+            key = _record_rank_key(record)
+            # Strict comparison preserves the full sort's first-record tie.
+            if self._key is None or key < self._key:
+                self.best, self._key = record, key
+        return self.best
 
 
 def _io_path(path):
@@ -525,6 +548,61 @@ class _FoldCheckpoint:
             self.previous_sha256 = record['_receipt']['sha256']
 
 
+def _exception_context(error):
+    """Keep bounded existing diagnostic facts without changing the exception.
+
+    Plain notes and status are copied; arbitrary diagnostic containers are not
+    serialized. A new control-flow interruption remains visible.
+    """
+    result = {}
+    try:
+        notes = getattr(error, '__notes__', None)
+        if type(notes) in (list, tuple):
+            kept = []
+            truncated = len(notes) > 8
+            for note in notes[:8]:
+                if issubclass(type(note), str):
+                    value = str.__str__(note)
+                    truncated = truncated or len(value) > 1024
+                    kept.append(value[:1024])
+            if kept:
+                result['exception_notes'] = kept
+            if truncated:
+                result['exception_notes_truncated'] = True
+    except Exception:
+        pass
+    try:
+        status = getattr(error, 'status', None)
+        if type(status) is str:
+            result['error_status'] = status[:256]
+            if len(status) > 256:
+                result['error_status_truncated'] = True
+    except Exception:
+        pass
+    causes, seen, current = [], {id(error)}, error
+    try:
+        while current.__cause__ is not None:
+            current = current.__cause__
+            if id(current) in seen or len(causes) == 4:
+                result['exception_causes_truncated'] = True
+                break
+            seen.add(id(current))
+            item = {'error_type': type(current).__name__}
+            try:
+                message = str(current)
+                item['message'] = message[:1024]
+                if len(message) > 1024:
+                    item['message_truncated'] = True
+            except Exception:
+                item['message_unavailable'] = True
+            causes.append(item)
+    except Exception:
+        pass
+    if causes:
+        result['exception_causes'] = causes
+    return result
+
+
 def _write_failure_json(path, value):
     """Report a failed evaluation without replacing its original exception."""
     try:
@@ -866,6 +944,7 @@ def _run_search(args, *, param_grid):
         evaluator = FoldEvaluator(X, y, ids, folds, max_epochs=args.epochs,
                                   random_state=args.random_state, batch_size=1,
                                   **execution_controls)
+        progress_leader = _ProgressLeader(records, expected_folds=args.folds)
 
         def rank():
             return ordered_eligible(records, expected_folds=args.folds)
@@ -895,7 +974,7 @@ def _run_search(args, *, param_grid):
             except (Exception, KeyboardInterrupt, SystemExit) as exc:
                 failure = {'stage': stage, 'params': dict(params),
                            'error_type': type(exc).__name__, 'message': str(exc),
-                           'completed_candidates': len(records)}
+                           'completed_candidates': len(records), **_exception_context(exc)}
                 _write_failure_json(out / 'failure.json', failure)
                 state = 'interrupted' if isinstance(exc, (KeyboardInterrupt, SystemExit)) else 'failed'
                 _write_failure_json(out / 'status.json', {'state': state, **failure,
@@ -938,9 +1017,9 @@ def _run_search(args, *, param_grid):
                 records.append(record)
                 attempted.add(key)
                 progress.complete(record)
-                ranked = rank()
+                best = progress_leader.add(record)
                 status = {'state': 'running', 'stage': name, 'completed_candidates': len(records),
-                          'best_mean_accuracy': float(record_score(ranked[0])) if ranked else None,
+                          'best_mean_accuracy': float(record_score(best)) if best is not None else None,
                           'final_evaluation_eligible': False, 'final_refit_performed': False,
                           'held_out_scored': False, 'official_test_partition_loaded': False}
                 write_json(out / 'status.json', status)

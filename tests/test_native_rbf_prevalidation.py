@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 import numpy as np
 from numpy.random import _pickle as numpy_rng_pickle
 from sklearn import config_context
+from _rbf_range_oracles import zero_or_one_kernel
 
 from two_stage_sgd_dwd import KernelSGDDWD, NumericalFailure, TwoStageDWDClassifier
 from two_stage_sgd_dwd import _core, _estimators, _native_optimizer, _training_kernels
@@ -123,18 +124,16 @@ class RBFColumnTests(unittest.TestCase):
         self.assertEqual(args, ())
         self.assertEqual(kwargs, {'metric': 'sqeuclidean'})
 
-    def test_distance_and_multiplication_overflow_keep_original_failures(self):
+    def test_distance_and_multiplication_overflow_recover_finite_columns(self):
         cases = [(np.array([[1e308], [-1e308]]), .2),
                  (np.array([[0.], [2.]]), float(np.finfo(np.float64).max))]
         for X, gamma in cases:
             with self.subTest(X=X.tolist(), gamma=gamma):
                 before = X.tobytes()
-                with self.assertRaises(FloatingPointError) as reference:
-                    _core.rbf_kernel(X, X[:1], gamma)
+                expected = zero_or_one_kernel(X, X[:1], gamma)
+                self.exact(_core.rbf_kernel(X, X[:1], gamma), expected)
                 loader = _training_kernels.make_rbf_column_loader(X, gamma)
-                with self.assertRaises(FloatingPointError) as candidate:
-                    loader(0)
-                self.assertEqual(str(candidate.exception), str(reference.exception))
+                self.exact(loader(0), expected[:, 0])
                 self.assertEqual(X.tobytes(), before)
 
     def test_final_kernel_nonfinite_check_is_retained(self):
@@ -181,6 +180,8 @@ class RBFColumnTests(unittest.TestCase):
 @requires_native
 class NativeRBFFitTests(unittest.TestCase):
     def assert_same_fit(self, a, b):
+        self.assertEqual(a.optimizer_backend_, 'python')
+        self.assertEqual(b.optimizer_backend_, 'native')
         for name in ('initial_state_', 'final_state_', 'selected_state_', 'rng_state_',
                      'selected_iteration_', 'n_updates_', 'n_samples_seen_', 'learning_rate_B_',
                      'stop_reason_', 'model_status_', 'fit_usable_', 'cv_eligible_',
@@ -207,7 +208,7 @@ class NativeRBFFitTests(unittest.TestCase):
                         external = pickle.dumps(rng, protocol=5)
                         options = dict(max_epochs=3, random_state=rng, sampling=sampling,
                                        gamma=gamma, kernel_cache_bytes=capacity)
-                        reference = KernelSGDDWD(**options).fit(X, y)
+                        reference = KernelSGDDWD(optimizer_backend='python', **options).fit(X, y)
                         with factory_spy() as factory:
                             candidate = KernelSGDDWD(optimizer_backend='native', **options).fit(X, y)
                         factory.assert_called_once()
@@ -222,7 +223,7 @@ class NativeRBFFitTests(unittest.TestCase):
             with self.subTest(sampling=sampling):
                 options = dict(retention_fraction=.8, max_epochs=3, random_state=2017,
                                sampling=sampling, gamma='scale', kernel_cache_bytes=14 * 14 * 8)
-                reference = TwoStageDWDClassifier(**options).fit(X, y)
+                reference = TwoStageDWDClassifier(optimizer_backend='python', **options).fit(X, y)
                 with factory_spy() as factory:
                     candidate = TwoStageDWDClassifier(optimizer_backend='native', **options).fit(X, y)
                 factory.assert_called_once()
@@ -264,7 +265,7 @@ class NativeRBFFitTests(unittest.TestCase):
                     native = KernelSGDDWD(max_epochs=2, random_state=rng,
                                          optimizer_backend='native').fit(X, y)
                 factory.assert_not_called()
-                reference = KernelSGDDWD(max_epochs=2, random_state=rng).fit(X, y)
+                reference = KernelSGDDWD(max_epochs=2, random_state=rng, optimizer_backend='python').fit(X, y)
                 self.assert_same_fit(reference, native)
                 self.assertEqual(pickle.dumps(rng, protocol=5), external)
 

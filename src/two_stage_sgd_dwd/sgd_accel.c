@@ -111,6 +111,67 @@ static int take_numeric_error(PyObject **error) {
     return *error != NULL;
 }
 
+static PyObject *fill_rates(PyObject *self, PyObject *args) {
+    PyObject *output, *updates_object, *count_object, *bound_object;
+    PyObject *exponent = NULL, *base_object = NULL, *power_object = NULL;
+    Py_buffer output_view = {0};
+    int success = 0;
+    const long long maximum = 9007199254740991LL;
+    if (!PyArg_ParseTuple(args, "OOOO", &output, &updates_object, &count_object, &bound_object)) return NULL;
+    if (!PyLong_CheckExact(updates_object) || !PyLong_CheckExact(count_object) ||
+            !PyFloat_CheckExact(bound_object)) {
+        PyErr_SetString(PyExc_TypeError, "Expected exact int counters and a float learning-rate bound");
+        return NULL;
+    }
+    long long updates = PyLong_AsLongLong(updates_object);
+    if (PyErr_Occurred()) return NULL;
+    long long count = PyLong_AsLongLong(count_object);
+    if (PyErr_Occurred()) return NULL;
+    double bound = PyFloat_AsDouble(bound_object);
+    if (updates < 0 || updates > maximum || count < 1 || count > maximum ||
+            updates > maximum - (count - 1) || !isfinite(bound) || bound <= 0.0) {
+        PyErr_SetString(PyExc_ValueError, "Unsupported learning-rate counters or bound");
+        return NULL;
+    }
+    const double inverse_bound = 1.0 / bound;
+    if (!isfinite(inverse_bound)) {
+        PyErr_SetString(PyExc_ValueError, "The reciprocal learning-rate bound must be finite");
+        return NULL;
+    }
+    if (!vector_buffer(output, &output_view, 0, 1)) goto cleanup;
+    if (output_view.len / 8 != count) {
+        PyErr_SetString(PyExc_ValueError, "The rate output length must equal the epoch size");
+        goto cleanup;
+    }
+    exponent = PyFloat_FromDouble(-0.75);
+    if (exponent == NULL) goto cleanup;
+    const double denominator = (double)count;
+    double *rates = (double *)output_view.buf;
+    for (Py_ssize_t j = 0; j < output_view.len / 8; j++) {
+        /* Preserve each Python rounding boundary; use its actual float pow. */
+        const double quotient = (double)(updates + j) / denominator;
+        const double base = 1.0 + quotient;
+        base_object = PyFloat_FromDouble(base);
+        if (base_object == NULL) goto cleanup;
+        power_object = PyNumber_Power(base_object, exponent, Py_None);
+        Py_CLEAR(base_object);
+        if (power_object == NULL) goto cleanup;
+        const double power = PyFloat_AsDouble(power_object);
+        if (PyErr_Occurred()) goto cleanup;
+        Py_CLEAR(power_object);
+        rates[j] = inverse_bound * power;
+        /* Preparing a large epoch must remain interruptible. The private
+           output is discarded by the caller if a handler raises. */
+        if (((j + 1) & 1023) == 0 && PyErr_CheckSignals() < 0) goto cleanup;
+    }
+    success = 1;
+cleanup:
+    if (output_view.obj) PyBuffer_Release(&output_view);
+    Py_XDECREF(exponent); Py_XDECREF(base_object); Py_XDECREF(power_object);
+    if (!success) return NULL;
+    Py_RETURN_NONE;
+}
+
 static PyObject *run_steps(PyObject *self, PyObject *args) {
     Functions *functions = (Functions *)PyModule_GetState(self);
     int kind;
@@ -177,7 +238,9 @@ static PyObject *run_steps(PyObject *self, PyObject *args) {
         q *= ys[i];
         multiplier = steps[t] * q;
         new_bias = bias - multiplier;
-        if (!isfinite(new_bias) || !isfinite(multiplier)) { error = PyUnicode_FromString("Nonfinite scalar update"); goto numerical_end; }
+        /* Finite steps and |q| <= 1 imply a finite multiplier. Also, bias is
+           finite on entry, so this check rejects any nonfinite multiplier. */
+        if (!isfinite(new_bias)) { error = PyUnicode_FromString("Nonfinite scalar update"); goto numerical_end; }
         double *old = (double *)a.buf, *next = (double *)z.buf, *features = (double *)x.buf;
         int check_final_coefficients = 1;
         if (kind == 1) {
@@ -251,6 +314,7 @@ cleanup:
 }
 
 static PyMethodDef methods[] = {
+    {"fill_rates", fill_rates, METH_VARARGS, "Fill a private epoch-rate buffer using the scalar Python schedule."},
     {"run_steps", run_steps, METH_VARARGS, "Execute ordered scalar updates using guarded BLAS dot and strict arithmetic."},
     {NULL, NULL, 0, NULL}
 };

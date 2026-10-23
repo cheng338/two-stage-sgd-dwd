@@ -2,8 +2,13 @@
 
 These execution options retain the DWD objectives, update definitions, seeds,
 and requested epoch budgets. They are independent of statistical parameter
-selection. The defaults remain `optimizer_backend="python"` and, where
+selection. The defaults are `optimizer_backend="auto"` and, where
 applicable, `kernel_cache_bytes=0`.
+
+The MNIST tuning example retains its explicit Python backend default for its
+recorded execution protocol. Pass `--optimizer-backend auto` to select the
+guarded automatic backend there; its receipt binds that choice and the loaded
+extension for resume validation.
 
 ## Backend selection
 
@@ -11,8 +16,8 @@ applicable, `kernel_cache_bytes=0`.
 
 | `optimizer_backend` | Behavior |
 | --- | --- |
-| `"python"` | Use the original Python orchestration and scalar update functions. This is the default. |
-| `"auto"` | Use the optional compiled scalar optimizer when supported; otherwise use Python and record the reason. |
+| `"python"` | Use the original Python orchestration and scalar update functions. |
+| `"auto"` | Default: use the optional compiled scalar optimizer when supported; otherwise use Python and record the reason. |
 | `"native"` | Require the compiled optimizer. Unsupported controls raise `ValueError`; an unavailable extension raises `ImportError`. |
 
 Native execution supports `batch_size=1`, either sampling policy, and
@@ -30,28 +35,43 @@ remain available through Python; `"auto"` records the fallback.
 The native loop retains the scalar update operation order and uses the guarded
 dot-product path described below.
 It prepares at most one epoch of observation indices and learning rates at a
-time. On NumPy 2.5.2, an exact built-in `Generator` using `PCG64`, `PCG64DXSM`,
-`Philox`, `SFC64`, or `MT19937` prepares replacement indices with one array
-draw. Scalar and array draws use the same bounded-integer routine in this
-version; regression checks compare both the indices and complete RNG state.
-Other NumPy versions, generator subclasses, and custom bit generators retain
+time. On stable NumPy releases 2.5.2 and later, an exact built-in `Generator`
+using `PCG64`, `PCG64DXSM`, `Philox`, `SFC64`, or `MT19937` prepares replacement
+indices with one array draw. Scalar and array draws use the same bounded-integer
+routine in the tested versions 2.5.2, 2.5.3 and 2.5.4; regression checks compare
+the indices, complete RNG state and continuation draws. Older releases, prerelease or
+custom version strings, generator subclasses, and custom bit generators retain
 scalar draws. Shuffle sampling retains its original epoch permutation.
 Preparing an array of indices does not batch the gradients: every update
 still uses one observation and its original learning rate.
 
 NumPy does not promise scalar/array stream equivalence across all builds and
-versions. The version guard is deliberately narrow; adding another version
-requires checking its implementation and exact stream/state parity. See
+versions. Later stable releases are eligible under a forward compatibility
+policy, without an upper version limit. They have not been tested in advance;
+this policy assumes scalar/array stream and state equivalence continues for
+the admitted built-in types. The exact stream, continuation and failed-update
+rollback regression checks run on eligible installed versions. See
 [NumPy's compatibility policy](https://numpy.org/doc/stable/reference/random/compatibility.html).
 
-For those same exact built-in generators on NumPy 2.5.2, native optimization
-uses the independent state returned by the getter as its epoch rollback
-snapshot, avoiding a redundant deep copy. This applies to both native sampling
+For those same exact built-in generators on stable NumPy releases 2.5.2 and
+later, native optimization uses the independent state returned by the getter
+as its epoch rollback snapshot, avoiding a redundant deep copy. This applies to both native sampling
 policies and preserves the getter position and failed-update RNG restoration.
-Other NumPy versions, generator subclasses and custom bit generators retain
+Ownership and rollback checks have passed on actual NumPy 2.5.2, 2.5.3 and
+2.5.4 implementations. Later stable releases are eligible under a forward
+compatibility policy that assumes the getter continues to return independent
+state; they have not been tested in advance. Older releases, prerelease or
+custom version strings, generator subclasses and custom bit generators retain
 the deep copy. Initial, selected, final and returned model snapshots keep their
-existing independent copies. This is separate from index-array preparation;
-extending either optimized path requires checking the relevant implementation.
+existing independent copies. Snapshot ownership and index-array stream
+equivalence are separate properties tested under the shared version policy.
+
+Eligible epoch learning rates are prepared by a compiled helper that retains
+Python's scalar power operation and the existing schedule. Exact integer-range
+checks protect the division arithmetic. Older extensions, unusual scalar types
+and counters outside that range retain the original Python expression. The
+helper polls pending signals every 1,024 entries; it does not combine gradients
+or change the number of updates.
 
 It does not prepare a kernel Gram matrix. A failed numerical update retains
 the diagnostic state from the preceding committed update and the RNG position
@@ -141,8 +161,10 @@ Diagnostics include `kernel_cache_hits_`, `kernel_cache_misses_`,
 `kernel_cache_capacity_columns_`. Disabled-cache counters are zero; an enabled
 cache with insufficient capacity records misses and retains zero bytes.
 `kernel_evaluation_count_` includes actual completed optimization/validation
-kernel evaluations, so hits add zero. Preparation and total evaluation counts
-retain their separate meanings.
+kernel-block evaluations, so hits add zero. Additional validation cancellation
+probes and corrected scores are recorded separately in
+`validation_recovery_work_`, with requested and completed rows and entries.
+Preparation and total evaluation counts retain their separate meanings.
 
 ## Availability and timing
 
@@ -158,8 +180,9 @@ the `_supports_tuple_rows` capability rather than assume it is always callable.
 
 The native linear loop checks every proposed coefficient while constructing
 the proposal. For ordinary NumPy arrays that need no projection, it avoids
-scanning that unchanged proposal a second time. Projected linear updates,
-kernel updates, and custom array types retain the final scan. This changes
+scanning that unchanged proposal a second time. Ordinary kernel proposals also
+check every coefficient in their fused update loop. Projected linear updates
+and unusual array types retain the separate final scan. This changes
 neither the update arithmetic nor the sampling and learning-rate choices.
 
 The compiled extension is optional; portable Python-only distributions retain
@@ -224,6 +247,18 @@ These are conservative engineering guards, not a mathematical certificate of
 identical scores or labels for all finite inputs. Floating-point reduction
 order differs, so bitwise equality is not promised. Non-RBF kernels and
 zero-width RBF use their existing direct routes even when `"blas"` is selected.
+
+Finite inputs can produce intermediate squared distances or scaled exponents
+outside the floating-point range. Shared direct-distance consumers recover
+exceptional representable RBF exponents and the small contrasts used by the
+existing `expm1` paths. Ordinary distance scaling keeps its existing arithmetic.
+The recovery requires the original numerical helpers, nearest binary64
+rounding and preserved subnormals; it does not change the caller's arithmetic
+mode. It preserves rejection of genuinely invalid distances and retains the
+historical behavior of replaced helpers or unsupported arithmetic modes.
+Recovery targets a rounded binary64 exponent, not arbitrary-precision kernel
+values or all contrasts below the representable range. Exceptional recovery
+can change scores or downstream fitted results and has a computational cost.
 
 The loss term in `KernelSGDDWD.objective(X, y)` uses the selected prediction
 backend, so the reported objective can reflect its score rounding. The RKHS

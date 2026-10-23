@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from numpy.testing import assert_allclose, assert_array_equal
 from scipy.spatial.distance import cdist
+from _rbf_range_oracles import zero_or_one_kernel
 
 from two_stage_sgd_dwd import KernelSGDDWD
 from two_stage_sgd_dwd import _prediction
@@ -32,7 +33,7 @@ def bits(actual, expected):
 
 @pytest.mark.parametrize('batch', [1, 4, 11, 100])
 def test_well_separated_rows_use_blas_and_match_direct_within_roundoff(batch):
-    X, basis, coefficients = inputs()
+    X, basis, coefficients = inputs(n_features=33)
     expected = direct(X, basis, coefficients, batch=batch)
     with patch.object(_prediction, 'cdist', side_effect=AssertionError('Unneeded direct fallback')):
         actual = fast(X, basis, coefficients, batch=batch)
@@ -77,7 +78,7 @@ def test_overflowing_norms_with_finite_direct_distances_use_direct(value):
 
 
 @pytest.mark.parametrize('kind', ['distance', 'gamma', 'coefficients', 'intercept'])
-def test_genuine_direct_numerical_failures_are_not_hidden(kind):
+def test_finite_range_recovery_and_genuine_direct_failures(kind):
     X, basis, coefficients = inputs()
     gamma, intercept = 0.2, 0.13
     if kind == 'distance':
@@ -89,8 +90,14 @@ def test_genuine_direct_numerical_failures_are_not_hidden(kind):
     else:
         intercept = np.inf
     for function in (direct, fast):
-        with pytest.raises(FloatingPointError):
-            function(X, basis, coefficients, intercept=intercept, gamma=gamma)
+        if kind in ('distance', 'gamma'):
+            kernel = zero_or_one_kernel(X, basis, gamma)
+            assert_array_equal(kernel, np.zeros_like(kernel))
+            actual = function(X, basis, coefficients, intercept=intercept, gamma=gamma)
+            bits(actual, np.full(len(X), intercept))
+        else:
+            with pytest.raises(FloatingPointError):
+                function(X, basis, coefficients, intercept=intercept, gamma=gamma)
 
 
 @pytest.mark.parametrize('n_basis', [5, 13, 17])
@@ -177,7 +184,7 @@ def test_layouts_readonly_and_inputs_are_unchanged(layout):
 
 
 def test_matmul_reuses_one_bounded_buffer_for_partial_last_block():
-    X, basis, coefficients = inputs(n_query=11)
+    X, basis, coefficients = inputs(n_features=33, n_query=11)
     original = np.matmul
     calls = []
 

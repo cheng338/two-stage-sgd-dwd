@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import numpy as np
 from scipy.spatial.distance import cdist
+from _rbf_range_oracles import zero_or_one_kernel
 
 from two_stage_sgd_dwd import KernelSGDDWD, TwoStageDWDClassifier
 from two_stage_sgd_dwd import _prediction
@@ -139,16 +140,17 @@ class PredictionBlockTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.model.decision_function(self.query)
 
-    def test_distance_and_width_overflow_match_original_failures(self):
+    def test_distance_and_width_overflow_preserve_finite_gaussian_scores(self):
         cases = [(np.full((12, 3), 1e308), np.full((2, 3), -1e308), 0.4),
                  (np.zeros((12, 3)), np.full((2, 3), 2.0), 1e308)]
         for basis, query, gamma in cases:
             with self.subTest(gamma=gamma):
                 self.model.basis_, self.model.gamma_ = basis, gamma
-                with self.assertRaises(FloatingPointError):
-                    self.original(self.model, query)
-                with self.assertRaises(FloatingPointError):
-                    self.model.decision_function(query)
+                expected_kernel = zero_or_one_kernel(query, basis, gamma)
+                np.testing.assert_array_equal(expected_kernel, np.zeros_like(expected_kernel))
+                expected = np.full(len(query), self.model.intercept_[0])
+                self.assert_bits(self.original(self.model, query), expected)
+                self.assert_bits(self.model.decision_function(query), expected)
 
     def test_nonfinite_scores_and_incompatible_coefficient_shape_still_fail(self):
         for field, values, error in [("dual_coef_", np.full((1, 12), np.nan), FloatingPointError),

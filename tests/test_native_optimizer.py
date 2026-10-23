@@ -29,7 +29,7 @@ class NativeOptimizerTests(ExactAssertions):
                 if isinstance(model, TwoStageDWDClassifier) else [model])
 
     def model(self, constructor, **settings):
-        options = dict(max_epochs=3, random_state=2017)
+        options = dict(max_epochs=3, random_state=2017, optimizer_backend='python')
         if constructor is TwoStageDWDClassifier:
             options['retention_fraction'] = .75
         options.update(settings)

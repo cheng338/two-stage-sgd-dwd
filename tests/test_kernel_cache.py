@@ -210,7 +210,9 @@ class KernelCacheEstimatorTests(ExactAssertions):
         with patch.object(_estimators, "_kernel_values", side_effect=record_kernel), \
                 patch.object(_estimators, "kernel_step", side_effect=record_step):
             model = KernelSGDDWD(kernel_cache_bytes=self.budget, max_epochs=2,
-                                 sampling="shuffle", random_state=51).fit(self.X, self.y)
+                                 sampling="shuffle", random_state=51,
+                                 optimizer_backend="python").fit(self.X, self.y)
+        self.assertEqual(model.optimizer_backend_, "python")
         n = len(self.X)
         self.assertEqual([event[0] for event in events[:2 * n]], ["column", "update"] * n)
         self.assertEqual([event[0] for event in events[2 * n:]], ["update"] * n)

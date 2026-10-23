@@ -1,3 +1,172 @@
+# October 23, 2026 cross-package integration validation
+
+Version remains 0.9.2. This integration rejects hidden complex values before
+real conversion, recovers representable RBF values and existing analytic
+contrasts after finite-input intermediate range failures, and adds qualified
+matrix-product uncertainty to explicitly requested diagnostics. It also
+preserves bounded exception context in tuning failures, checks installed wheels
+against the actual platform, avoids duplicate release-tag push CI, and clarifies
+binary64 retained-count flooring and prediction-block effects during fitting.
+The two-stage methodology and numerical acceptance criteria are unchanged.
+
+Validation used isolated Python 3.12.15 with NumPy 2.5.4, SciPy 1.18.1 and
+scikit-learn 1.9.1 on Robust/MKL and Windows/AOCL 5.2. Each host ran the nine
+integration stages sequentially against a frozen source manifest. Numerical
+work used up to 16 total threads; hardware rounding and small object-validation
+checks used one thread. Both hosts completed all stages with unchanged sources
+and inputs. The canonical source was held unchanged during qualification.
+
+Fresh native and portable wheels were built, installed in separate environments,
+checked for installed-module origin and distribution RECORD integrity, tested
+without importing the source checkout, and checked again afterwards:
+
+| Environment | Native wheel | Portable wheel |
+| --- | --- | --- |
+| Windows/AOCL | 1,692 passed | 1,596 passed; 96 native-only skips |
+| Robust/MKL | 1,676 passed; 16 Windows-only skips | 1,580 passed; 112 platform/native-only skips |
+
+All four suites finished without failures. AOCL validation also verified the
+copied runtime's owned libraries and extension bindings before and after each
+suite. Native qualification required an available compiled extension; a portable
+fallback was not accepted as a native result. These are Python 3.12 results;
+no new Python 3.11/3.13 full-suite or GitHub-hosted CI run is claimed here.
+
+Additional checks retained the original failure triggers and independent
+oracles: 524 object-input subtests, 295 RBF range subtests, 39 analytic-contrast
+subtests, and 10 actual-fit controls per host. Floating-point-mode comparisons
+preserved all pre-existing fields, warnings, fitting state and caller controls;
+only the explicitly added diagnostic uncertainty field was excluded from exact
+report equality. This covered 1,050 observations in five modes on Windows and
+840 observations in four modes on Robust.
+
+The original 3,600-case prediction panel was replayed on Robust and its frozen
+2,084-case subset on AOCL, retaining the earlier adverse cases. Direct, BLAS,
+near-constant helper and validation routes retained strict baseline byte parity
+and introduced no additional oracle-sign errors, nonfinite results or exceptions.
+Diagnostic qualification retained the original 216-case panel plus 250 component
+and interaction observations per host. Existing reported components, acceptance
+decisions and fitted state remained unchanged. The added uncertainty estimates
+are reporting indicators, not certified bounds or new stopping rules.
+
+These checks support correctness in the tested configurations and cases, not a general
+speedup. Earlier measured costs of object-array inspection, exceptional RBF
+recovery and explicit diagnostic reporting remain relevant. Separate exact-affine
+readout and equivalent-fold-cache experiments are not included in this source.
+No package version, release artifact or historical experiment was rewritten.
+
+
+# October 22, 2026 replacement-sampling compatibility follow-up
+
+Both replacement-index array preparation and independent epoch snapshot reuse
+now admit stable NumPy releases >=2.5.2, without an upper version limit. Exact
+Generator and bit-generator type checks and the older/custom/prerelease
+fallbacks remain. This supersedes the separate sampling upper limit described
+in the earlier snapshot follow-up below. Future eligibility is a compatibility
+policy, not a claim of advance testing or guaranteed future scalar/array stream
+equivalence.
+
+The final candidate passed 30 focused tests and 11,393 subtests in each of five
+isolated Python 3.12 environments: Windows/MKL on actual NumPy 2.5.2 and 2.5.3,
+Windows/AOCL on 2.5.4, and Robust/MKL on 2.5.3 and 2.5.4. There were no failures,
+errors or skips. These checks cover exact indices, complete RNG state and
+continuation draws, wide bounds through the int64 limit, cached/block-boundary
+states, custom-generator fallbacks, failed-update prefixes and public fit
+parity. Future-version mocks test routing only; actual stream checks now run
+on eligible installed releases without the old three-version test restriction.
+No numerical assertions, update definitions or acceptance criteria changed.
+Checks were sequential per host at one numerical thread; no new performance
+claim or mixed-library parity claim is made.
+
+# October 22, 2026 RNG snapshot compatibility follow-up
+
+Independent epoch snapshot reuse now admits ordinary stable NumPy versions
+2.5.2 and later for the five exact built-in bit-generator types. This is a
+forward compatibility policy, not a claim that future implementations have
+been tested. Older, prerelease and custom version strings and generator
+subclasses retain deep copies. Replacement-index array preparation keeps its
+separate 2.5.2--2.5.4 guard. Fitting formulas and numerical acceptance are unchanged.
+
+Focused Python 3.12 validation passed 29 tests and 11,281 subtests per
+environment, with no failures, errors or skips: Windows/MKL with actual NumPy
+2.5.2 and 2.5.3, Windows/AOCL with 2.5.4, and Robust/MKL with 2.5.3 and 2.5.4.
+Tests cover getter and setter ownership, nested dictionaries and arrays,
+partially consumed caches, block boundaries, subclass and shared-state
+fallbacks, failed-update rollback, continued draws and native/Python parity.
+Mocked future-version strings check dispatch only. All checks ran sequentially
+per host at one numerical thread in isolated environments or package overlays;
+shared working environments were not modified. These are correctness results,
+not new timing benchmarks.
+
+An initial Robust setup combining a NumPy 2.5.3 OpenBLAS wheel with MKL SciPy
+failed 119 exact native/Python comparisons. The unchanged baseline failed the
+same 119 comparisons, while the candidate passed with a matching MKL stack.
+Ownership and focused rollback checks passed in the mixed setup. The failed
+receipts are retained: this change does not resolve or establish exact parity
+for that mixed numerical-library combination. No assertions were relaxed.
+
+# October 22, 2026 integrated implementation validation
+
+Version remains 0.9.2. These changes retain the two-stage methodology, free
+intercepts, constraints and regularization, sampling definitions, averaged batch
+gradients, learning-rate formula and processed-observation clock. Numerical
+acceptance criteria are unchanged. Validation used isolated Python 3.12.15
+with NumPy 2.5.4 on Windows/AOCL and Robust/MKL. Timed comparisons ran
+sequentially at one and 16 native threads.
+
+Final installed-wheel qualification used the narrowed prediction source,
+verified source manifests and installed-module origin checks. The focused
+native suites passed 935 tests and 12,820 subtests on each host. Complete
+portable-wheel suites passed 1,498 tests and 10,070 subtests on Windows, with
+96 expected compiled-extension skips; Robust passed 1,482 tests and 10,070
+subtests, with those 96 skips plus 16 Windows-specific skips. Neither variant
+had failures. These results concern the verified artifacts and tested runtimes,
+not every supported dependency combination. Earlier Windows qualification
+attempts encountered overlong test-helper paths; rerunning unchanged sources
+under a shorter output path resolved those failures.
+
+Small prediction blocks use direct distances when the basis contains at most
+2,048 elements, features number at most 32, and the actual block contains at
+most 64 rows. Shape sweeps, immediate boundaries, tails, oracle fixtures,
+exceptions and recovery checks covered both environments. Narrowing the gate
+removed the broader rule's consistently adverse active groups. Individual
+slowdowns and floating-point differences remain; this is an execution choice,
+not an accuracy improvement or universal speed guarantee.
+
+Compiled rate preparation preserves Python's power operation and the existing
+schedule, with guarded historical fallbacks. Each host passed 900 same-setting
+correctness pairs and 100 controlled failure groups. Extended timing and
+1,440-pair hard-case confirmations per host preserved compared identities and
+RNG behavior. The simpler reciprocal-hoist alternative was assessed but not
+combined with this overlapping optimization. Small workload-dependent costs
+remain in cache, finite-check and snapshot comparisons; exact same-thread
+results do not imply cross-thread identity. Real POSIX signals interrupted the
+rate helper with the original exception; this does not establish complete
+estimator interruption or resume guarantees.
+
+Validation-only RBF recovery improves selected near-constant readouts while
+recording additional physical work separately from logical counters. Ordinary
+comparison states were exact. Difficult cases changed rounded validation
+losses, selected checkpoints and, on Robust, stopping and final states while
+the existing selection and patience rules remained unchanged. Tested labels
+were unchanged, but rounded losses and an extreme subnormal score could worsen.
+Recovery has a real runtime cost; neither universal accuracy improvement nor
+historical floating-point equivalence is claimed.
+
+Optional optimization diagnostics removed tested material gap-estimate errors
+and inappropriate analytic-bound results. Some component errors and diagnostic
+call times worsened. These remain numerical objective-gap and stationarity
+estimates, not formal certificates or new fitting/stopping criteria.
+
+The three estimator constructors now select the optimizer automatically under
+existing eligibility guards. Fresh-process and repeated fallback comparisons
+verified identities, RNG preservation, routing and unavailable-extension errors.
+Ordinary eligible fits were substantially faster; tiny first fits and some
+fallbacks incurred costs. Stronger confirmation did not sustain the original
+large custom-kernel slowdown, without establishing its cause. Explicit Python
+and native controls remain available; the CV example and FoldEvaluator retain
+explicit Python defaults. Import and process timings are separate from fitting
+and establish no general startup-speed benefit.
+
 # October 17, 2026 optional optimization diagnostics
 
 The explicitly requested `optimization_diagnostics()` helper preserves both

@@ -21,6 +21,9 @@ are impossible. The count is rounded down without imposing a minimum count or
 adding rows to supply both classes. An empty selection raises `SelectionError`
 with status `empty_selection`; a nonempty selection with only one label raises
 the same exception with status `single_class_selection`.
+The product is evaluated in binary64 arithmetic before applying the floor.
+For example, `0.29 * 100` is slightly below 29, so its retained count is 28.
+There is no epsilon correction or exact-decimal interpretation of the ratio.
 The default `retention_fraction=0.3` matches the ensemble package's 30% starting
 value. The original Chapter 3 guide's 5% remains an explicit API setting,
 outside the recommended grid; changing the default does not establish its
@@ -151,6 +154,14 @@ with defaults the earliest stop is epoch 20. The initial zero state is
 diagnostic, not a validation candidate.
 Without validation data, the final finite state is selected at the epoch cap.
 
+Eligible near-constant RBF validation scores use the same cancellation recovery
+as prediction. This changes only their floating-point evaluation, not the loss
+definition, update gradients or checkpoint rules. It can change a nearly tied
+checkpoint, the stopping epoch and the resulting final state. More accurate
+scores do not guarantee uniformly more accurate rounded mean losses. Extra
+physical recovery work is reported in `validation_recovery_work_` separately
+from the existing logical kernel counters.
+
 The named `termination_criterion_` is `fixed_epochs` or `validation_patience`.
 `criterion_reached_` records its completion, not optimality. `n_iter_` is the
 number of committed optimizer updates, `returned_iteration_` is the selected
@@ -178,8 +189,11 @@ diagnostics; changing them takes effect on the next fit. A fitted
 A fitted `TwoStageDWDClassifier` uses its own current `prediction_batch_size`
 on each prediction call through a read-only child override. The child's stored
 parameter is unchanged; direct child predictions and RKHS-norm diagnostics use
-the child's own validated block size. This setting controls scoring memory,
-not the fitted coefficients.
+the child's own validated block size. Changing this setting after fitting does
+not modify the fitted coefficients. When used during fitting, however, the
+scoring block size can change floating-point reduction order and the resulting
+updates or checkpoints. Equal mathematical update equations do not guarantee
+identical fitted results across block sizes.
 
 Standalone models expose `initial_state_`, `final_state_`, `selected_state_`,
 `selected_iteration_`, `n_updates_`, `n_samples_seen_`, `n_epochs_`, `history_`, `learning_rate_B_`,
@@ -234,7 +248,7 @@ An interrupted non-RBF preparation raises `TrainingError` with status
 RBF's diagonal is known to be one and can safely return the usual zero-update
 diagnostic if its cap expires before any optimizer step.
 
-The default execution settings are `optimizer_backend="python"` and
+The default execution settings are `optimizer_backend="auto"` and
 `kernel_cache_bytes=0` on kernel and two-stage estimators. The linear estimator
 accepts the backend setting but has no kernel-cache parameter. Optional native
 scalar execution preserves the update definitions and scalar sampling stream;
@@ -309,6 +323,26 @@ for invalid or incompatible data and
 raises scikit-learn's `NotFittedError`. A failure does not invalidate the fitted
 model or install a replacement result. Reports are independent, JSON-compatible
 dictionaries. Two-stage reports contain `linear_stage` and `kernel_stage`.
+
+For eligible near-constant RBF blocks, the helper evaluates the small variation
+with `expm1` and separates the constant component of quadratic forms. A finite
+mean whose unscaled sum overflows is recomputed after scaling its terms. These
+changes improve particular floating-point calculations; rounded dual vectors
+need not satisfy exact feasibility or exact coefficient identities, and a
+reported estimate remains uncertified. The report warns about amplification of
+quadratic roundoff by a small regularization parameter.
+
+Kernel reports also include `kernel_matrix_product_uncertainty`, with separate
+indicators for coefficient, gradient and dual matrix-vector products. Scaled
+estimates use the observed kernel-entry magnitudes and vector absolute sums
+to assess inner-product cancellation and its effect on quadratic components.
+They are conservative reporting estimates, not formal error bounds, corrected
+objective values or acceptance criteria. The report identifies whether the
+matrix is the literal kernel or the existing RBF `expm1` contrast representation.
+Its qualification states omitted errors, including kernel construction,
+separately accumulated constant components and formation of the gradient or
+dual vectors. A false warning flag does not establish accuracy. Reporting
+thresholds do not change fitting, stopping rules or convergence flags.
 
 Linear work is proportional to the design size. Kernel work uses two blocked
 passes over the actual stage data, evaluating `2*n*n` kernel values. The report

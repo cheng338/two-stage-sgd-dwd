@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import numbers
 import time
 
@@ -13,6 +14,7 @@ from sklearn.utils.validation import check_array, check_is_fitted, validate_data
 from ._core import (_mean_finite_losses, dwd_loss, kernel_batch_step, kernel_step, linear_batch_step,
                     linear_step, rbf_kernel, select_near_boundary)
 from ._cache import LazyKernelColumnCache
+from . import _core, _kernels, _prediction
 from ._kernels import _TRUSTED, resolve_kernel
 from ._prediction import rbf_prediction_scores, rbf_prediction_scores_blas
 from ._selection_reporting import selection_composition
@@ -81,6 +83,8 @@ def _kernel_values(X, Y, gamma, spec=None):
 
 _ORIGINAL_KERNEL_VALUES = _kernel_values
 _ORIGINAL_RBF_KERNEL = rbf_kernel
+_ORIGINAL_CDIST = _core.cdist
+_ORIGINAL_NEAR_CONSTANT_SCORES = _prediction._near_constant_scores
 
 
 def _set_kernel(est, X):
@@ -179,6 +183,7 @@ _STAGE_DIAGNOSTICS = (
     "fit_usable_", "cv_eligible_", "checkpoint_selection_",
     "optimality_checked_", "optimality_met_", "converged_", "model_status_",
     "optimizer_backend_", "optimizer_backend_reason_",
+    "validation_recovery_work_",
 ) + _CACHE_DIAGNOSTICS
 
 
@@ -255,6 +260,16 @@ def _check_deadline(deadline):
 
 def _scores(kind, X, coefficients, intercept, basis=None, gamma=None,
             batch_size=256, deadline=None, kernel_counter=None, kernel_spec=None):
+    return _score_blocks(kind, X, coefficients, intercept, basis, gamma,
+                         batch_size, deadline, kernel_counter, kernel_spec)
+
+
+_ORIGINAL_SCORES = _scores
+
+
+def _score_blocks(kind, X, coefficients, intercept, basis, gamma,
+                  batch_size, deadline, kernel_counter, kernel_spec, recovery=None):
+    """Shared direct arithmetic; recovery is used only for validation readout."""
     result = np.empty(len(X), dtype=np.float64)
     for start in range(0, len(X), batch_size):
         _check_deadline(deadline)
@@ -269,9 +284,126 @@ def _scores(kind, X, coefficients, intercept, basis=None, gamma=None,
                 values = kernel @ coefficients + intercept
         if not np.isfinite(values).all():
             raise FloatingPointError("Nonfinite decision scores")
+        if recovery is not None:
+            recovery(block, kernel, values)
         result[start:start + len(block)] = values
         _check_deadline(deadline)
     return result
+
+
+def _validation_recovery_counts():
+    return {"eligible_calls": 0, "delegated_calls": 0,
+            **{f"{operation}_{unit}_{state}": 0
+               for operation in ("near_constant_probe", "near_constant_score")
+               for unit in ("rows", "entries")
+               for state in ("requested", "completed")}}
+
+
+class _ValidationScoreRecovery:
+    """Apply the existing RBF identity and count its additional physical work.
+
+    A completed probe includes direct distances and their finite scaled
+    exponents. A completed score includes expm1, products and compensated
+    summation. These are separate operations on the same entries, not two
+    additional distance evaluations. Requested/completed counts also describe
+    partial work when a numerical exception interrupts recovery.
+    """
+    def __init__(self, basis, coefficients, intercept, gamma, envelope, work):
+        self.basis, self.coefficients = basis, coefficients
+        self.intercept, self.gamma = intercept, gamma
+        self.envelope, self.work = envelope, work
+
+    def __call__(self, block, kernel, values):
+        # Only our fresh analytic kernel may be used as recovery workspace.
+        if type(kernel) is np.ndarray and kernel.flags.owndata and kernel.flags.writeable:
+            _prediction._near_constant_scores(
+                block, self.basis, self.coefficients, self.intercept, self.gamma,
+                kernel, values, self.envelope, self, True)
+
+    def phase(self, name):
+        pass
+
+    def fallback(self, name, rows):
+        self.work[name + "_rows_requested"] += rows
+        self.work[name + "_entries_requested"] += rows * len(self.basis)
+
+    def complete_fallback(self, name, rows):
+        self.work[name + "_rows_completed"] += rows
+        self.work[name + "_entries_completed"] += rows * len(self.basis)
+
+
+def _validation_recovery(kind, X, coefficients, intercept, basis, gamma,
+                         batch_size, kernel_counter, kernel_spec, work):
+    # Replaced helpers, custom specs and unusual array protocols retain the
+    # original scorer. The correction has no new ownership or hook contract.
+    if (kind != "kernel" or _scores is not _ORIGINAL_SCORES or
+            _kernel_values is not _ORIGINAL_KERNEL_VALUES or
+            rbf_kernel is not _ORIGINAL_RBF_KERNEL or
+            _core.rbf_kernel is not _ORIGINAL_RBF_KERNEL or
+            _kernels.rbf_kernel is not _ORIGINAL_RBF_KERNEL or
+            _core.cdist is not _ORIGINAL_CDIST or
+            _prediction.cdist is not _ORIGINAL_CDIST or
+            _prediction._near_constant_scores is not _ORIGINAL_NEAR_CONSTANT_SCORES):
+        return None
+    for value, ndim in ((X, 2), (basis, 2), (coefficients, 1)):
+        if (type(value) is not np.ndarray or value.dtype != np.float64 or
+                value.ndim != ndim or not value.flags.c_contiguous or not value.flags.aligned):
+            return None
+    if (not len(basis) or coefficients.shape != (len(basis),) or
+            X.shape[1] != basis.shape[1] or not X.shape[1] or
+            type(gamma) not in (float, np.float64) or not math.isfinite(gamma) or gamma <= 0 or
+            type(intercept) not in (float, np.float64) or not math.isfinite(intercept) or
+            not np.isfinite(coefficients).all() or type(batch_size) is not int or batch_size < 1):
+        return None
+    if kernel_counter is not None and not (
+            type(kernel_counter) is list and len(kernel_counter) == 1 and type(kernel_counter[0]) is int):
+        return None
+    if kernel_spec is not None and not (
+            type(kernel_spec) is _kernels.KernelSpec and type(kernel_spec.kernel) is str and
+            kernel_spec.kernel == "rbf" and type(kernel_spec.gamma) in (float, np.float64) and
+            kernel_spec.gamma == gamma and type(kernel_spec.kws) is dict and
+            (not kernel_spec.kws or
+             (set(kernel_spec.kws) == {"gamma"} and
+              type(kernel_spec.kws["gamma"]) in (float, np.float64) and
+              kernel_spec.kws["gamma"] == gamma))):
+        return None
+    info = np.finfo(np.float64)
+    roundoff = (len(basis) + 2) * info.eps
+    if roundoff >= 0.5:
+        return None
+    # This trigger matches prediction recovery; it is neither a loss tolerance
+    # nor a certified error bound. A nonfinite envelope disables recovery.
+    with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+        mass = float(np.sum(np.abs(coefficients)))
+        factor = 8.0 * roundoff / (1.0 - roundoff)
+        envelope = (4.0 * factor * (mass + abs(intercept)) +
+                    info.smallest_subnormal * (8.0 * (len(basis) + 2)))
+    return _ValidationScoreRecovery(basis, coefficients, intercept, gamma, envelope, work)
+
+
+def _validation_scores(kind, X, coefficients, intercept, basis=None, gamma=None,
+                       batch_size=256, deadline=None, kernel_counter=None, kernel_spec=None,
+                       recovery_work=None):
+    """Correct cancellation at validation checkpoints, without changing SGD.
+
+    Batch gradients and RKHS self scores continue to use ``_scores``. More
+    accurate scores can change rounded losses and checkpoint decisions near
+    ties; the existing patience, tolerance and strict-best rules remain intact.
+    Logical kernel counts retain their meaning. ``recovery_work`` separately
+    records extra probes and score recomputations, including failure prefixes.
+    The original before/after-block deadline checks remain in the shared loop;
+    additional recovery work can therefore reach a real deadline earlier.
+    """
+    work = _validation_recovery_counts() if recovery_work is None else recovery_work
+    recovery = _validation_recovery(kind, X, coefficients, intercept, basis, gamma,
+                                    batch_size, kernel_counter, kernel_spec, work)
+    if recovery is None:
+        work["delegated_calls"] += 1
+        return _scores(kind, X, coefficients, intercept, basis, gamma,
+                       batch_size, deadline, kernel_counter, kernel_spec)
+    work["eligible_calls"] += 1
+    return _score_blocks(kind, X, coefficients, intercept, basis, gamma,
+                         batch_size, deadline, kernel_counter, kernel_spec, recovery)
 
 
 def _snapshot(coefficients, intercept, iteration, rng, samples_seen=None):
@@ -326,6 +458,10 @@ def _optimize_steps(kind, X, y, validation, rng, est, deadline, callback=None,
     best, best_loss, reference, misses = None, np.inf, None, 0
     updates, samples_seen, updates_time, validation_time = 0, 0, 0.0, 0.0
     kernel_counter = [0]
+    recovery_work = _validation_recovery_counts()
+    # Keep completed extra work visible even if a user callback aborts the fit
+    # with an exception outside the optimizer's numerical/deadline handlers.
+    est.validation_recovery_work_ = recovery_work
     order = None
     stop, error = "epoch_cap", None
     for t in range(int(est.max_epochs) * steps_per_epoch):
@@ -389,11 +525,12 @@ def _optimize_steps(kind, X, y, validation, rng, est, deadline, callback=None,
                 began_validation = time.perf_counter()
                 try:
                     Xv, yv = validation
-                    prediction = _scores(kind, Xv, coefficients, intercept, X,
+                    prediction = _validation_scores(kind, Xv, coefficients, intercept, X,
                                          getattr(est, "gamma_", None),
                                          getattr(est, "prediction_batch_size", 256), deadline,
                                          kernel_counter=kernel_counter,
-                                         kernel_spec=getattr(est, "_kernel_spec_", None))
+                                         kernel_spec=getattr(est, "_kernel_spec_", None),
+                                         recovery_work=recovery_work)
                     value = _mean_finite_losses(dwd_loss(yv * prediction))
                     _check_deadline(deadline)
                     if not np.isfinite(value):
@@ -446,6 +583,7 @@ def _optimize_steps(kind, X, y, validation, rng, est, deadline, callback=None,
             "update_seconds_": updates_time, "validation_checkpoint_seconds_": validation_time,
             "optimization_seconds_": time.perf_counter() - began,
             "kernel_evaluation_count_": kernel_counter[0], "error_": error,
+            "validation_recovery_work_": recovery_work,
             "rng_state_": copy.deepcopy(rng.bit_generator.state)}
 
 
@@ -466,6 +604,7 @@ class _BaseDWD(ClassifierMixin, BaseEstimator):
         started = time.perf_counter()
         _clear(self)
         _controls(self)
+        self.validation_recovery_work_ = _validation_recovery_counts()
         if kind == "kernel":
             _penalty(self)
             _integer(self.prediction_batch_size, "prediction_batch_size")
@@ -561,7 +700,7 @@ class LinearSGDDWD(_BaseDWD):
     criterion_reached_ reports the named termination_criterion_, never
     optimality. converged_=False is accompanied by optimality_checked_=False.
 
-    optimizer_backend='python' is the default. 'auto' uses the optional native
+    optimizer_backend='auto' is the default. It uses the optional native
     extension only for batch_size=1, contiguous aligned features, and no
     validation, deadline or callback; otherwise it records a Python fallback.
     'native' requires that supported configuration and an installed extension.
@@ -570,7 +709,7 @@ class LinearSGDDWD(_BaseDWD):
     def __init__(self, *, batch_size=1, sampling="with_replacement", max_epochs=200,
                  validation_interval=5, patience=3,
                  min_epochs=10, tol=1e-4, stopping="auto", random_state=None, max_seconds=None,
-                 optimizer_backend="python"):
+                 optimizer_backend="auto"):
         self.batch_size = batch_size
         self.sampling = sampling
         self.max_epochs = max_epochs
@@ -635,7 +774,7 @@ class KernelSGDDWD(_BaseDWD):
                  sampling="with_replacement", max_epochs=200,
                  validation_interval=5, patience=3, min_epochs=10, tol=1e-4,
                  stopping="auto", random_state=None, max_seconds=None, prediction_batch_size=256,
-                 prediction_backend="blas", kernel_cache_bytes=0, optimizer_backend="python"):
+                 prediction_backend="blas", kernel_cache_bytes=0, optimizer_backend="auto"):
         self.lambd = lambd
         self.kernel = kernel
         self.gamma = gamma
@@ -738,7 +877,7 @@ class TwoStageDWDClassifier(_BaseDWD):
                  max_epochs=200, validation_interval=5, patience=3, min_epochs=10,
                  tol=1e-4, stopping="auto", random_state=None, max_seconds=None,
                  linear_max_seconds=None, prediction_batch_size=256,
-                 prediction_backend="blas", kernel_cache_bytes=0, optimizer_backend="python"):
+                 prediction_backend="blas", kernel_cache_bytes=0, optimizer_backend="auto"):
         self.retention_fraction = retention_fraction
         self.lambd = lambd
         self.kernel = kernel

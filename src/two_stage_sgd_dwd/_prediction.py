@@ -1,7 +1,8 @@
 """Bounded RBF prediction for already validated public query features.
 
-Only public prediction uses these helpers. Training, validation checkpoints,
-deadlines, and kernel diagnostics retain their original evaluation path.
+Public prediction uses the bounded evaluators. Eligible validation checkpoints
+also reuse the narrow near-constant score recovery helper; optimizer updates
+retain their original kernel evaluation path.
 """
 from __future__ import annotations
 
@@ -10,8 +11,12 @@ import math
 import numpy as np
 from scipy.spatial.distance import cdist
 
-from ._core import _finite_array, _finite_result, _finite_scalar
+from ._core import (_finite_array, _finite_result, _finite_scalar, _scale_rbf_distances,
+                    _rbf_zero_distances_are_exact)
 from .profiling import _current_call, _profiled
+
+_ORIGINAL_CDIST = cdist
+_ORIGINAL_FINITE_RESULT = _finite_result
 
 
 @_profiled("direct")
@@ -48,8 +53,12 @@ def rbf_prediction_scores(X, basis, coefficients, intercept, gamma, batch_size):
         with np.errstate(over="raise", invalid="raise", divide="raise"):
             with np.errstate(under="ignore"):
                 cdist(block, right, metric="sqeuclidean", out=kernel)
-                _finite_result(kernel, "squared Euclidean distances")
-                kernel *= -width
+                if _finite_result is _ORIGINAL_FINITE_RESULT:
+                    _scale_rbf_distances(kernel, block, right, width,
+                                         trusted=cdist is _ORIGINAL_CDIST)
+                else:
+                    _finite_result(kernel, "squared Euclidean distances")
+                    kernel *= -width
                 np.exp(kernel, out=kernel)
             _finite_result(kernel, "RBF kernel")
             if profile is not None:
@@ -81,6 +90,21 @@ def _distance_rows_to_kernel(distances, width):
         np.exp(distances, out=distances)
     _finite_result(distances, "RBF kernel")
 
+_ORIGINAL_DISTANCE_ROWS_TO_KERNEL = _distance_rows_to_kernel
+
+
+def _range_checked_distance_rows_to_kernel(distances, width, block, basis):
+    """Preserve replaced two-argument hooks; recover built-in distance range."""
+    if (_distance_rows_to_kernel is not _ORIGINAL_DISTANCE_ROWS_TO_KERNEL
+            or _finite_result is not _ORIGINAL_FINITE_RESULT):
+        return _distance_rows_to_kernel(distances, width)
+    with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
+        _scale_rbf_distances(distances, block, basis, width,
+                             trusted=cdist is _ORIGINAL_CDIST)
+        np.exp(distances, out=distances)
+    _finite_result(distances, "RBF kernel")
+
+
 
 def _near_constant_scores(block, basis, coefficients, intercept, width,
                           kernel, values, envelope, profile, known_direct):
@@ -99,15 +123,27 @@ def _near_constant_scores(block, basis, coefficients, intercept, width,
         # Approximate norm/dot rows retain the independent distance check.
         candidates &= (np.logical_not(known_direct) |
                        (np.min(kernel, axis=1) >= 1.0 - 2.0 * np.sqrt(np.finfo(float).eps)))
-    for index in np.flatnonzero(candidates):
+    candidate_rows = np.flatnonzero(candidates)
+    if not len(candidate_rows):
+        return
+    # Check shared coordinates once per eligible block, not once per probe.
+    zero_distances_exact = (cdist is _ORIGINAL_CDIST and
+                            _rbf_zero_distances_are_exact(basis) and
+                            _rbf_zero_distances_are_exact(block))
+    for index in candidate_rows:
         if profile is not None:
             profile.fallback("near_constant_probe", 1)
             profile.phase("kernel")
         row = kernel[index:index + 1]
         with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
             cdist(block[index:index + 1], basis, metric="sqeuclidean", out=row)
-            _finite_result(row, "squared Euclidean distances")
-            row *= -width
+            if _finite_result is _ORIGINAL_FINITE_RESULT:
+                _scale_rbf_distances(row, block[index:index + 1], basis, width,
+                                     trusted=cdist is _ORIGINAL_CDIST, contrast=True,
+                                     zero_distances_exact=zero_distances_exact)
+            else:
+                _finite_result(row, "squared Euclidean distances")
+                row *= -width
             if profile is not None:
                 profile.complete_fallback("near_constant_probe", 1)
             if np.max(np.abs(row)) > np.sqrt(np.finfo(np.float64).eps):
@@ -188,6 +224,26 @@ def rbf_prediction_scores_blas(X, basis, coefficients, intercept, gamma, batch_s
             profile.start_block()
         block = X[start:start + batch_size]
         kernel = buffer[:len(block)]
+        # Small, low-dimensional blocks avoid norm/dot setup. This execution
+        # choice retains strict distance arithmetic and cancellation recovery.
+        if (right.size <= 2048 and right.shape[1] <= 32 and len(block) <= 64):
+            if profile is not None:
+                profile.fallback("execution_direct", len(block))
+                profile.phase("kernel")
+            cdist(block, right, metric="sqeuclidean", out=kernel)
+            _range_checked_distance_rows_to_kernel(kernel, width, block, right)
+            if profile is not None:
+                profile.phase("score")
+            with np.errstate(over="raise", invalid="raise", divide="raise"):
+                values = kernel @ coefficients + intercept
+            _finite_result(values, "decision scores")
+            _near_constant_scores(block, right, coefficients_array, intercept, width,
+                                  kernel, values, summation_envelope, profile, True)
+            result[start:start + len(block)] = values
+            if profile is not None:
+                profile.complete_fallback("execution_direct", len(block))
+                profile.complete_block(len(block))
+            continue
         # Only approximate intermediates suppress arithmetic exceptions. Any
         # suspicious result is retried by the original strict direct formula.
         with np.errstate(over="ignore", invalid="ignore", under="ignore"):
@@ -217,7 +273,7 @@ def rbf_prediction_scores_blas(X, basis, coefficients, intercept, gamma, batch_s
             if profile is not None:
                 profile.complete_fallback("distance_guard", fallback_rows)
         try:
-            _distance_rows_to_kernel(kernel, width)
+            _range_checked_distance_rows_to_kernel(kernel, width, block, right)
             if profile is not None:
                 profile.phase("score")
             with np.errstate(over="raise", invalid="raise", divide="raise"):
@@ -230,7 +286,7 @@ def rbf_prediction_scores_blas(X, basis, coefficients, intercept, gamma, batch_s
                 profile.fallback("arithmetic_retry", len(block))
                 profile.phase("kernel")
             _direct_distance_rows(block, right, kernel, np.ones(len(block), dtype=bool))
-            _distance_rows_to_kernel(kernel, width)
+            _range_checked_distance_rows_to_kernel(kernel, width, block, right)
             if profile is not None:
                 profile.phase("score")
             with np.errstate(over="raise", invalid="raise", divide="raise"):
@@ -265,7 +321,7 @@ def rbf_prediction_scores_blas(X, basis, coefficients, intercept, gamma, batch_s
                 profile.fallback("uncertain_score", len(block), np.count_nonzero(uncertain_scores))
                 profile.phase("kernel")
             _direct_distance_rows(block, right, kernel, np.ones(len(block), dtype=bool))
-            _distance_rows_to_kernel(kernel, width)
+            _range_checked_distance_rows_to_kernel(kernel, width, block, right)
             if profile is not None:
                 profile.phase("score")
             with np.errstate(over="raise", invalid="raise", divide="raise"):

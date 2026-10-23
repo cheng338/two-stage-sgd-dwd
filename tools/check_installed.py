@@ -25,9 +25,22 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
+def expected_wheel_tag(flavor):
+    """Return the tag for a portable or locally built stable-ABI wheel.
+
+    The platform spelling follows wheel's normalization of sysconfig's build
+    platform. Repaired manylinux/macOS multi-platform wheels need a separate
+    compatibility policy; this check deliberately requires the local build tag.
+    """
+    require(flavor in ("native", "portable"), "Unknown wheel flavor.")
+    if flavor == "portable":
+        return "py3-none-any"
+    platform = sysconfig.get_platform().replace("-", "_").replace(".", "_")
+    return "cp311-abi3-" + platform
+
+
 def check(flavor, junit=None):
     require(sys.flags.isolated == 1, "Run this check with Python -I.")
-    require(sysconfig.get_platform() == "win-amd64", "This check targets Windows AMD64 wheels.")
     prefix = Path(sys.prefix).resolve()
     require(prefix != Path(sys.base_prefix).resolve(), "An isolated venv is required.")
     roots = {Path(sysconfig.get_path(name)).resolve() for name in ("purelib", "platlib")}
@@ -50,8 +63,7 @@ def check(flavor, junit=None):
     wheel_path = installed(distribution.locate_file(metadata_files[0].parent / "WHEEL"))
     tags = [line[5:] for line in wheel_path.read_text(encoding="utf-8").splitlines()
             if line.startswith("Tag: ")]
-    expected_tag = ("py3-none-any" if flavor == "portable" else
-                    "cp311-abi3-win_amd64")
+    expected_tag = expected_wheel_tag(flavor)
     require(tags == [expected_tag], f"Unexpected installed wheel tags: {tags}")
     package = importlib.import_module(PACKAGE)
     package_path = installed(package.__file__).parent

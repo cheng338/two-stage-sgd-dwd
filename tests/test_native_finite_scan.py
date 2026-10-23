@@ -210,7 +210,7 @@ class NativeFiniteScanTests(unittest.TestCase):
                         options['kernel_cache_bytes'] = len(y) ** 2 * 8
                     if constructor is TwoStageDWDClassifier:
                         options['retention_fraction'] = .8
-                    reference = constructor(**options).fit(X, y)
+                    reference = constructor(optimizer_backend='python', **options).fit(X, y)
                     candidate = constructor(optimizer_backend='native', **options).fit(X, y)
                     pairs = [(reference, candidate)]
                     if constructor is TwoStageDWDClassifier:
@@ -221,6 +221,8 @@ class NativeFiniteScanTests(unittest.TestCase):
                             self.assertEqual(pickle.dumps(getattr(reference, name), protocol=5),
                                              pickle.dumps(getattr(candidate, name), protocol=5), name)
                     for first, second in pairs:
+                        self.assertEqual(first.optimizer_backend_, 'python')
+                        self.assertEqual(second.optimizer_backend_, 'native')
                         for name in ('initial_state_', 'final_state_', 'selected_state_', 'rng_state_',
                                      'n_updates_', 'n_samples_seen_', 'learning_rate_B_', 'model_status_',
                                      'stop_reason_', 'fit_usable_', 'cv_eligible_'):

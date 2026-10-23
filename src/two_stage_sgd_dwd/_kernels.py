@@ -21,7 +21,7 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 from sklearn.metrics.pairwise import pairwise_kernels
 
-from ._core import _finite_array, _finite_result, rbf_kernel
+from ._core import _contains_complex, _finite_array, _finite_result, rbf_kernel
 
 
 _TRUSTED = frozenset(("linear", "rbf", "poly", "polynomial", "laplacian", "cosine", "chi2"))
@@ -102,7 +102,7 @@ class KernelSpec:
                 # cannot alter fitting rows, future predictions, or the spec.
                 values = self.kernel(left.copy(), right.copy(), **deepcopy(self.kws))
                 supplied = np.asarray(values)
-                if np.iscomplexobj(supplied):
+                if _contains_complex(supplied):
                     raise ValueError("callable kernel output must be real")
                 try:
                     values = np.asarray(supplied, dtype=np.float64)

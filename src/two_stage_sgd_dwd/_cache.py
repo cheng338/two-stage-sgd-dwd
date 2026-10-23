@@ -36,10 +36,11 @@ class LazyKernelColumnCache:
         The fitting caller supplies the original contiguous float64 column.
         Neither cache lookup nor storage changes its values or layout.
         """
-        if index in self._columns:
+        column = self._columns.get(index)
+        if column is not None:
             self.hits += 1
             self._columns.move_to_end(index)
-            return self._columns[index], True
+            return column, True
         self.misses += 1
         column = compute()
         if (not isinstance(column, np.ndarray) or column.dtype != np.float64 or

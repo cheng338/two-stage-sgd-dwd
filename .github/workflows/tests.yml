@@ -2,6 +2,7 @@ name: Installed Windows wheels
 
 on:
   push:
+    branches: ["**"]
   pull_request:
   workflow_dispatch:
 

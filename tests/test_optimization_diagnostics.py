@@ -66,15 +66,16 @@ class OptimizationDiagnosticsTests(unittest.TestCase):
         self.assertFalse(report["formal_certificate"])
         json.dumps(report, allow_nan=False)
 
-    def test_overflowing_diagnostic_sum_preserves_a_usable_fitted_state(self):
+    def test_overflowing_diagnostic_sum_recovers_the_finite_mean(self):
         # The loss mean is representable even though its diagnostic sum is not.
-        # An unavailable optional diagnostic must not invalidate the model.
+        # Recovering the optional report must not alter the usable fitted state.
         model = fitted_linear(self.X, self.y, b=-1e308)
         predictions = model.predict(self.X)
         self.assertTrue(np.isfinite(model.objective(self.X, self.y)))
         before = pickle.dumps(model, protocol=5)
-        with self.assertRaisesRegex(FloatingPointError, "diagnostic sum"):
-            optimization_diagnostics(model, self.X, self.y)
+        report = optimization_diagnostics(model, self.X, self.y)
+        self.assertEqual(report["objective"], model.objective(self.X, self.y))
+        self.assertTrue(math.isfinite(report["numerical_gap_estimate"]))
         self.assertEqual(pickle.dumps(model, protocol=5), before)
         assert_array_equal(model.predict(self.X), predictions)
         self.assertTrue(model.fit_usable_)

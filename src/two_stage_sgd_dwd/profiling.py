@@ -91,11 +91,12 @@ def prediction_profile():
 
     ``kernel`` includes distance computation and exponentiation; ``score`` is
     score accumulation and its finite checks; ``guard`` includes uncertainty
-    checks. Fallback counters record requested and successfully completed
-    recomputations (distance rows for ``distance_guard``, direct-distance and
+    checks. Fallback counters record requested and successfully completed work
+    (distance rows for ``distance_guard``, direct-distance and
     scaled-exponent checks for ``near_constant_probe``, full scores for other
     reasons). A completed probe need not lead to a ``near_constant_score``
-    correction. ``triggered_rows`` distinguishes uncertain scores from the full
+    correction. ``execution_direct`` counts the first evaluation of a small
+    block by direct distances, not a recomputation. ``triggered_rows`` distinguishes uncertain scores from the full
     blocks recomputed for them. Failed calls retain partial progress. Timings
     include profiling overhead and are intended for diagnosis, not benchmarking.
     """

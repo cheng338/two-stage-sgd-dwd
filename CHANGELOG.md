@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased
+
+- Reject complex values hidden in object arrays before real-valued conversion,
+  using shared validation for fitting, callable kernels and diagnostics.
+- Recover representable RBF values and existing analytic contrasts when
+  intermediate finite-input distance arithmetic exceeds its range. Preserve
+  ordinary calculations, helper-identity checks and arithmetic-mode safeguards.
+- Report qualified kernel matrix-product uncertainty in explicit optimization
+  diagnostics without changing reported components or acceptance criteria.
+- Preserve bounded exception notes, status and causes in tuning failure records
+  while propagating the original exception.
+- Validate installed wheels against the actual platform and restrict push CI
+  to branches to avoid duplicate release-tag matrices.
+- Document the binary64 retained-count floor and the possible effect of kernel
+  scoring block sizes on floating-point training arithmetic.
+- Select the guarded automatic optimizer by default, preserving explicit
+  Python/native choices and fallback for unsupported controls or unavailable
+  extensions.
+- Prepare eligible epoch learning rates in the compiled helper using the
+  existing scalar schedule and Python power operation. Retain compatibility
+  fallbacks, strict arithmetic, interrupt checks and committed failure state.
+- Avoid redundant cache lookups and native multiplier checks while retaining
+  numerical guards. Reuse independent epoch RNG snapshots for exact built-in
+  generators on stable NumPy releases 2.5.2 and later, with ownership and
+  rollback checks on 2.5.2, 2.5.3 and 2.5.4 and conservative custom-build and
+  subclass fallbacks. Use the same forward eligibility for replacement-index
+  array preparation, without an upper version limit. Later-release eligibility
+  is a compatibility policy; regression checks separately cover snapshot
+  ownership, exact sampling streams and failed-update rollback.
+- Route small eligible RBF prediction blocks through direct distances with
+  the same cancellation recovery and profiling controls.
+- Recover near-constant RBF validation scores at the validation call site and
+  report its extra physical work separately. Checkpoint rules and update
+  gradients are unchanged; corrected floating-point scores can change a
+  selected checkpoint, stopping epoch and final state.
+- Improve optional optimization diagnostics for representable means and
+  near-constant RBF quadratic forms while retaining two kernel traversals,
+  complete metadata and the existing acceptance criteria. These numerical
+  estimates are not certified bounds.
+- Maintain the adaptive example's displayed best candidate incrementally,
+  preserving exact fold comparisons, stable ties and authoritative stage/final
+  ranking.
+
 ## 0.9.2 - 2026-10-17
 
 - State All Rights Reserved while licensing terms remain undecided, include

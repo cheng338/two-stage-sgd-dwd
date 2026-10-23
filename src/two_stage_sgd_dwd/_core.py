@@ -13,11 +13,40 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 from scipy.spatial.distance import cdist
 
+_ORIGINAL_CDIST = cdist
+
+
+def _contains_complex(array):
+    """Inspect represented object entries without invoking conversion hooks."""
+    if array.dtype.kind != "O":
+        return array.dtype.kind == "c"
+    pending, seen = [array], set()
+    complex_types, array_type = (complex, np.complexfloating), np.ndarray
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        for item in current.flat:
+            item_type = type(item)
+            # Exact built-in real types cannot hide an imaginary component;
+            # subclasses and custom conversion objects retain full inspection.
+            if item_type is float or item_type is int or item_type is bool:
+                continue
+            if issubclass(item_type, complex_types):
+                return True
+            if issubclass(item_type, array_type):
+                if item.dtype.kind == "c":
+                    return True
+                if item.dtype.kind == "O":
+                    pending.append(item)
+    return False
+
 
 def _finite_array(value: ArrayLike, name: str, ndim: int | None = None) -> NDArray[np.float64]:
     try:
         supplied = np.asarray(value)
-        if np.iscomplexobj(supplied):
+        if _contains_complex(supplied):
             raise ValueError(f"{name} must contain real numerical values")
         result = np.asarray(supplied, dtype=np.float64)
     except (TypeError, ValueError) as exc:
@@ -279,6 +308,127 @@ def kernel_batch_step(
     return new_coefficients, float(new_intercept)
 
 
+def _rbf_recovery_arithmetic():
+    """Qualify new recovery for nearest binary64 with retained subnormals.
+
+    This observes caller arithmetic without changing its mode or NumPy policy.
+    The predicate is shared in form with the independently checked affine
+    readout gate. It is not a platform, library-vendor or version whitelist.
+    """
+    one = float(1)
+    eps = float(np.finfo(float).eps)
+    half, three_quarters = eps * .5, eps * .75
+    tiny = float(np.finfo(float).smallest_subnormal)
+    return (one + half == one and -one - half == -one
+            and one + three_quarters == one + eps
+            and -one - three_quarters == -one - eps
+            and tiny * one == tiny and tiny != 0.0)
+
+
+def _rbf_zero_distances_are_exact(values):
+    """Certify duplicate-only zeros for finite binary64 direct distances.
+
+    Allowed coordinates are zero or at least 2**-458 in magnitude. Unequal
+    allowed values differ by at least 2**-510, whose square is normal. This
+    certificate exempts only zero distances; positive tiny values still use
+    the existing range recovery. Callers hoist it over shared query/basis data.
+    """
+    if type(values) is not np.ndarray or values.dtype != np.float64:
+        return False
+    # Flush modes can compare represented subnormal coordinates equal to zero.
+    # Do not issue a represented-coordinate certificate in that arithmetic.
+    if not _rbf_recovery_arithmetic():
+        return False
+    magnitude = np.abs(values)
+    return bool(np.all((magnitude == 0.0) |
+                       (np.isfinite(magnitude) & (magnitude >= float.fromhex("0x1p-458")))))
+
+
+def _scale_rbf_distances(distances, left, right, width, *, trusted, contrast=False,
+                         zero_distances_exact=False):
+    """Preserve ordinary exponents; recover exceptional represented ranges.
+
+    Only a captured built-in cdist result is eligible. Replaced helpers keep
+    strict historical finite-distance and multiplication behavior. Inputs and
+    width are already finite, real and shape-validated by the caller.
+    """
+    finite = bool(np.isfinite(distances).all())
+    if not trusted:
+        if not finite:
+            raise FloatingPointError("squared Euclidean distances produced a nonfinite value")
+        distances *= -width
+        return
+    info = np.finfo(np.float64)
+    small_distance = info.tiny * left.shape[1]
+    # If even a normal-range distance this small gives an exponent far below
+    # epsilon, its lost subnormal terms cannot affect the rounded exp near one.
+    # Existing expm1 consumers need small representable contrasts even when
+    # exp itself would round to one. Ordinary Gaussian entries keep their gate.
+    inspect_small = contrast or width > (info.eps / 8.0) / small_distance
+    too_large = (width > 1.0 and finite and
+                 float(np.max(distances, initial=0.0)) > info.max / width)
+    small_entries = (distances <= small_distance) if inspect_small else None
+    if contrast and zero_distances_exact:
+        # The caller certified both operands once. Positive tiny entries,
+        # including invalid negative values, retain their original handling.
+        small_entries &= distances != 0.0
+    tiny_present = inspect_small and bool(np.any(small_entries))
+    if finite and not too_large and not tiny_present:
+        distances *= -width
+        return
+    # Charge the arithmetic qualification only when new recovery is needed.
+    # Nondefault modes retain the historical finite check and multiplication;
+    # in particular, this does not repair existing directed-mode saturation.
+    if not _rbf_recovery_arithmetic():
+        if not finite:
+            raise FloatingPointError("squared Euclidean distances produced a nonfinite value")
+        distances *= -width
+        return
+    if (contrast and finite and not too_large and tiny_present
+            and not np.any(distances)
+            and np.all(left == right[0]) and np.all(right == right[0])):
+        # A genuinely constant block has exactly zero pair distances. Do not
+        # visit every pair with Python rational arithmetic in this common case.
+        distances *= -width
+        return
+    if np.isnan(distances).any() or np.any(distances < 0.0):
+        raise FloatingPointError("squared Euclidean distances produced an invalid value")
+    repair = ~np.isfinite(distances)
+    if width > 1.0:
+        repair |= distances > info.max / width
+    if inspect_small:
+        repair |= small_entries
+    if contrast:
+        # Zero computed distances can denote exact duplicates or underflow.
+        # Filter actual duplicates rowwise before entering the rational loop;
+        # comparisons do not change their historical signed-zero arithmetic.
+        zeros = repair & (distances == 0.0)
+        for i in np.flatnonzero(np.any(zeros, axis=1)):
+            columns = np.flatnonzero(zeros[i])
+            identical = np.all(right[columns] == left[i], axis=1)
+            repair[i, columns[identical]] = False
+        if not np.any(repair):
+            distances *= -width
+            return
+    # Save only exceptional coordinates; avoid overflowing ordinary multiply.
+    pairs = tuple(zip(*np.nonzero(repair)))
+    distances[repair] = 0.0
+    distances *= -width
+    from fractions import Fraction
+    gamma = Fraction.from_float(float(width))
+    for i, j in pairs:
+        squared = Fraction(0)
+        for x, y in zip(left[i], right[j]):
+            if x != y:
+                delta = Fraction.from_float(float(x)) - Fraction.from_float(float(y))
+                squared += delta * delta
+        try:
+            exponent = float(gamma * squared)
+        except OverflowError:
+            exponent = math.inf
+        distances[i, j] = -exponent
+
+
 def rbf_kernel(X: ArrayLike, Y: ArrayLike, gamma: float) -> NDArray[np.float64]:
     """Return an RBF block ``exp(-gamma * ||X[i]-Y[j]||**2)``.
 
@@ -295,8 +445,8 @@ def rbf_kernel(X: ArrayLike, Y: ArrayLike, gamma: float) -> NDArray[np.float64]:
         raise ValueError("gamma must be strictly positive")
     with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
         distances = cdist(left, right, metric="sqeuclidean")
-        _finite_result(distances, "squared Euclidean distances")
-        distances *= -width
+        _scale_rbf_distances(distances, left, right, width,
+                             trusted=cdist is _ORIGINAL_CDIST)
         result = np.exp(distances, out=distances)
     _finite_result(result, "RBF kernel")
     return result

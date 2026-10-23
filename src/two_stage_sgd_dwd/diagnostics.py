@@ -14,12 +14,19 @@ import numbers
 import time
 
 import numpy as np
+from scipy.spatial.distance import cdist
 from sklearn.utils.validation import check_is_fitted
 
+from . import _core, _kernels
+from ._core import _contains_complex, _mean_finite_losses
 from ._estimators import KernelSGDDWD, LinearSGDDWD, TwoStageDWDClassifier
 
 
 __all__ = ["optimization_diagnostics"]
+
+_ORIGINAL_KERNEL_EVALUATE = _kernels.KernelSpec.evaluate
+_ORIGINAL_RBF_KERNEL = _kernels.rbf_kernel
+_ORIGINAL_CDIST = _core.cdist
 
 
 QUALIFICATION = (
@@ -31,7 +38,7 @@ QUALIFICATION = (
 
 def _array(value, name, ndim):
     raw = np.asarray(value)
-    if np.iscomplexobj(raw):
+    if _contains_complex(raw):
         raise ValueError(f"{name} must be real")
     try:
         result = np.asarray(raw, dtype=np.float64)
@@ -64,14 +71,96 @@ def _norm(value, name):
     return _finite(scale * np.linalg.norm(value / scale), name)
 
 
-def _quadratic(vector, product, name):
+def _quadratic(vector, product, name, *, constant_component=None):
     terms = vector * product
+    if constant_component is not None:
+        # For K = 11' + E, keep (sum v)**2 separate from v' E v.
+        # Recombining K v first can erase its small, important contrasts.
+        terms = np.r_[np.float64(constant_component) ** 2, terms]
     value = _finite(_fsum(map(float, terms)), name)
     scale = _finite(_fsum(map(float, np.abs(terms))), name + " scale")
     tolerance = 64.0 * np.finfo(float).eps * max(1.0, scale)
     if value < -tolerance:
         raise FloatingPointError(f"{name} is negative beyond roundoff; PSD assumption failed")
     return max(0.0, value), value, tolerance
+
+
+def _uncertainty_product(*factors):
+    """Represent a nonnegative reporting scale without avoidable overflow.
+
+    This supports an indicator, not an outward-rounded error certificate.
+    A positive scale below the representable range is marked explicitly.
+    """
+    if any(value == 0.0 for value in factors):
+        return 0.0, "zero"
+    mantissa, exponent = 1.0, 0
+    for value in factors:
+        if not math.isfinite(value) or value < 0.0:
+            return None, "unavailable"
+        part, power = math.frexp(value)
+        mantissa *= part
+        mantissa, adjust = math.frexp(mantissa)
+        exponent += power + adjust
+    try:
+        result = math.ldexp(mantissa, exponent)
+    except OverflowError:
+        return None, "overflow"
+    if result == 0.0:
+        return math.ulp(0.0), "underflow_limited"
+    return result, "estimated"
+
+
+def _uncertainty_sum(*scales):
+    if any(value is None for value, status in scales):
+        return None, "unavailable"
+    try:
+        value = math.fsum(item[0] for item in scales)
+    except OverflowError:
+        return None, "overflow"
+    status = "underflow_limited" if any(item[1] == "underflow_limited" for item in scales) else "estimated"
+    return value, "zero" if value == 0.0 else status
+
+
+def _kernel_product_uncertainty(vector, maximum, product, quadratic, n):
+    """Qualify inner-product risk using M*||v||_1 and M*||v||_1**2.
+
+    M is the observed maximum absolute entry of the actual matrix used by
+    this pass. These upper surrogates cover |K||v| and |v|'|K||v| in exact
+    arithmetic. Their floating evaluation is a qualified risk indicator.
+    """
+    magnitude = np.abs(vector)
+    largest = float(np.max(magnitude, initial=0.0))
+    if largest == 0.0 or maximum == 0.0:
+        inner = propagated = (0.0, "zero")
+    else:
+        with np.errstate(under="ignore"):
+            mass = math.fsum(map(float, magnitude / largest))
+        neps = n * np.finfo(float).eps
+        if neps >= 0.5:
+            inner = propagated = (None, "unavailable")
+        else:
+            factor = neps / (1.0 - neps)
+            # eps is twice unit roundoff. Include a gradual-underflow scale
+            # without making a portability or directed-rounding guarantee.
+            tiny = (2.0 * n + 2.0) * math.ulp(0.0)
+            inner = _uncertainty_sum(_uncertainty_product(factor, maximum, largest, mass), (tiny, "estimated"))
+            propagated = _uncertainty_sum(
+                _uncertainty_product(factor, maximum, largest, mass, largest, mass),
+                _uncertainty_product(tiny, largest, mass))
+    def warning(scale, reference):
+        value, status = scale
+        return bool(value is None or status == "underflow_limited"
+                    or value > 1e-8 * max(1.0, abs(reference)))
+    observed = float(np.max(np.abs(product), initial=0.0))
+    return {
+        "matrix_entry_magnitude": maximum,
+        "maximum_product_error_scale": inner[0],
+        "maximum_product_scale_status": inner[1],
+        "quadratic_propagation_error_scale": propagated[0],
+        "quadratic_scale_status": propagated[1],
+        "matrix_product_warning": warning(inner, observed),
+        "quadratic_component_warning": warning(propagated, quadratic),
+    }
 
 
 def _inputs(model, X, y, *, require_intercept=True):
@@ -111,7 +200,48 @@ def _loss_and_alpha(margins):
     loss[~upper] = 1.0 - margins[~upper]
     loss[upper] = 0.25 / margins[upper]
     alpha[upper] = (0.5 / margins[upper]) ** 2
-    return _finite(_fsum(map(float, loss)) / len(loss), "mean loss"), alpha
+    try:
+        mean_loss = math.fsum(map(float, loss)) / len(loss)
+    except OverflowError:
+        # Only the sum overflowed: a mean of finite nonnegative losses can
+        # still be represented. Preserve the compensated ordinary reduction.
+        mean_loss = _mean_finite_losses(loss)
+    return _finite(mean_loss, "mean loss"), alpha
+
+
+def _near_constant_rbf_width(spec, X):
+    """Qualify only the unchanged built-in RBF on a narrow feature range.
+
+    This execution guard is not an error bound. Custom kernel methods, even
+    ones advertising an RBF name, retain their original evaluation behavior.
+    """
+    if (type(spec) is not _kernels.KernelSpec
+            or getattr(spec.evaluate, "__func__", None) is not _ORIGINAL_KERNEL_EVALUATE
+            or _kernels.rbf_kernel is not _ORIGINAL_RBF_KERNEL
+            or _core.cdist is not _ORIGINAL_CDIST
+            or type(spec.kernel) is not str
+            or spec.kernel != "rbf"):
+        return None
+    width = spec.gamma
+    if (isinstance(width, (bool, np.bool_)) or not isinstance(width, numbers.Real)
+            or not math.isfinite(width) or width <= 0.0):
+        return None
+    # resolve_kernel stores gamma in kws; hand-constructed empty specs are also
+    # valid. Do not bypass inconsistent or unexpected fitted keyword state.
+    if type(spec.kws) is not dict or set(spec.kws) - {"gamma"}:
+        return None
+    keyword_width = spec.kws.get("gamma", width)
+    if (isinstance(keyword_width, (bool, np.bool_))
+            or not isinstance(keyword_width, numbers.Real)
+            or keyword_width != width):
+        return None
+    try:
+        with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
+            spans = np.max(X, axis=0) - np.min(X, axis=0)
+            bound = float(np.sum(spans * spans)) * width
+    except FloatingPointError:
+        return None
+    return float(width) if math.isfinite(bound) and bound <= math.sqrt(np.finfo(float).eps) else None
 
 
 def _balanced_alpha(raw_alpha, signed):
@@ -214,15 +344,36 @@ def _kernel(model, X, signed, intercept, block_size, started):
     if not callable(getattr(spec, "evaluate", None)):
         raise ValueError("A fitted kernel specification is required")
     a, n = coef[0], len(X)
+    contrast_width = _near_constant_rbf_width(spec, X)
+    # Every diagnostic block is a view of this same validated fitting matrix.
+    zero_distances_exact = (contrast_width is not None and cdist is _ORIGINAL_CDIST and
+                            _core._rbf_zero_distances_are_exact(X))
     Ka = np.empty(n)
     max_diagonal, evaluated, maximum_block = 0.0, 0, 0
+    maximum_entries = [0.0, 0.0]
+    pass_index = 0
 
     def block(start):
         nonlocal evaluated, maximum_block
         stop = min(n, start + block_size)
-        values = _array(spec.evaluate(X[start:stop], X), "kernel block", 2)
+        if contrast_width is None:
+            values = _array(spec.evaluate(X[start:stop], X), "kernel block", 2)
+        else:
+            # Evaluate E = K - 11' directly, without rounding K to one first.
+            # These are the same n-by-n kernel entries represented as contrasts;
+            # each is evaluated once per pass, with no additional Gram pass.
+            values = cdist(X[start:stop], X, metric="sqeuclidean")
+            _core._scale_rbf_distances(values, X[start:stop], X, contrast_width,
+                                       trusted=cdist is _ORIGINAL_CDIST, contrast=True,
+                                       zero_distances_exact=zero_distances_exact)
+            np.expm1(values, out=values)
+            if not np.isfinite(values).all():
+                raise FloatingPointError("Nonfinite RBF kernel contrasts")
         if values.shape != (stop - start, n):
             raise ValueError("Kernel block shape does not match fitting observations")
+        maximum_entries[pass_index] = max(
+            maximum_entries[pass_index], abs(float(np.min(values, initial=0.0))),
+            abs(float(np.max(values, initial=0.0))))
         evaluated += values.size
         maximum_block = max(maximum_block, values.size)
         return stop, values
@@ -231,11 +382,19 @@ def _kernel(model, X, signed, intercept, block_size, started):
         stop, values = block(start)
         Ka[start:stop] = values @ a
         diagonal = values[np.arange(stop - start), np.arange(start, stop)]
+        if contrast_width is not None:
+            diagonal = diagonal + 1.0
         if np.any(diagonal < 0.0):
             raise FloatingPointError("Negative kernel diagonal violates PSD assumption")
         max_diagonal = max(max_diagonal, float(np.max(diagonal)))
         del values
-    norm_squared, raw_norm_squared, norm_tolerance = _quadratic(a, Ka, "RKHS squared norm")
+    coefficient_sum = None if contrast_width is None else _fsum(map(float, a))
+    norm_squared, raw_norm_squared, norm_tolerance = _quadratic(
+        a, Ka, "RKHS squared norm", constant_component=coefficient_sum)
+    norm_uncertainty = _kernel_product_uncertainty(
+        a, maximum_entries[0], Ka, raw_norm_squared, n)
+    if contrast_width is not None:
+        Ka += coefficient_sum
     mean_loss, raw_alpha = _loss_and_alpha(signed * (Ka + intercept))
     objective = _finite(mean_loss + lambd * norm_squared, "kernel objective")
     raw_q = signed * raw_alpha / n
@@ -245,12 +404,17 @@ def _kernel(model, X, signed, intercept, block_size, started):
     # Both products share the second block traversal; no persistent Gram matrix.
     products = np.empty((n, 2))
     vectors = np.column_stack((t, q))
+    pass_index = 1
     for start in range(0, n, block_size):
         stop, values = block(start)
         products[start:stop] = values @ vectors
         del values
-    gradient_squared, raw_gradient_squared, gradient_tolerance = _quadratic(t, products[:, 0], "RKHS gradient squared norm")
-    dual_squared, raw_dual_squared, dual_tolerance = _quadratic(q, products[:, 1], "dual RKHS squared norm")
+    gradient_sum = None if contrast_width is None else _fsum(map(float, t))
+    dual_sum = None if contrast_width is None else _fsum(map(float, q))
+    gradient_squared, raw_gradient_squared, gradient_tolerance = _quadratic(
+        t, products[:, 0], "RKHS gradient squared norm", constant_component=gradient_sum)
+    dual_squared, raw_dual_squared, dual_tolerance = _quadratic(
+        q, products[:, 1], "dual RKHS squared norm", constant_component=dual_sum)
     dual_penalty = _finite((dual_squared / 4.0) / lambd, "dual penalty")
     dual = _finite(_fsum(map(float, np.sqrt(alpha))) / n - dual_penalty, "dual objective")
     dual_roundoff_scale = _finite((dual_tolerance / 4.0) / lambd, "dual penalty roundoff scale")
@@ -266,12 +430,35 @@ def _kernel(model, X, signed, intercept, block_size, started):
         raw_rkhs_gradient_squared=raw_gradient_squared,
         raw_dual_rkhs_squared=raw_dual_squared,
         quadratic_roundoff_tolerances=[norm_tolerance, gradient_tolerance, dual_tolerance],
+        kernel_matrix_product_uncertainty={
+            "representation": "literal_kernel" if contrast_width is None else "rbf_expm1_contrast",
+            "coefficient_product": norm_uncertainty,
+            "gradient_product": _kernel_product_uncertainty(
+                t, maximum_entries[1], products[:, 0], raw_gradient_squared, n),
+            "dual_product": _kernel_product_uncertainty(
+                q, maximum_entries[1], products[:, 1], raw_dual_squared, n),
+            "reporting_relative_threshold": 1e-8,
+            "reporting_absolute_reference_floor": 1.0,
+            "qualification": (
+                "Qualified matrix-product risk indicators, not formal error bounds or "
+                "certificates. M*||v||_1 and M*||v||_1**2 are conservative exact-arithmetic "
+                "surrogates for |K||v| and |v|'|K||v|; their evaluated scales can be "
+                "pessimistic. They exclude kernel-construction error, separately summed "
+                "RBF constant components and propagated errors in forming the gradient "
+                "or dual vectors. Product errors can also affect loss and alpha. "
+                "Thresholds are reporting choices only; no acceptance or stopping "
+                "decision changes. A false warning does not establish accuracy. "
+                "Unavailable or underflow-limited scales warn without altering the result."
+            ),
+        },
         dual_penalty_roundoff_scale=dual_roundoff_scale,
-        dual_bound_roundoff_warning=bool(raw_dual_squared < 0.0 and dual_roundoff_scale > 1e-8 * max(1.0, abs(objective))),
+        dual_bound_roundoff_warning=bool(dual_roundoff_scale > 1e-8 * max(1.0, abs(objective))),
         roundoff_qualification=(
             "Quadratic roundoff scales are numerical checks, not bounds on all "
-            "kernel or matrix-product error. A false dual_bound_roundoff_warning "
-            "does not rule out cancellation or certify the dual bound."
+            "kernel or matrix-product error. dual_bound_roundoff_warning marks "
+            "potential amplification by weak regularization, including zero or "
+            "positive quadratics; it need not imply an actual error. A false "
+            "warning does not rule out cancellation or certify the dual bound."
         ),
         n_kernel_values=int(evaluated), max_block_elements=int(maximum_block),
         kernel_passes=2, block_size=int(block_size),
@@ -299,7 +486,9 @@ def optimization_diagnostics(estimator, X, y, *, block_size=256):
         passes over the fitting kernel, evaluating ``2 * n_samples**2`` values,
         with O(block_size * n_samples) kernel working storage. The two-stage
         kernel sample count is the number of retained observations. No Gram
-        matrix is retained after this call.
+        matrix is retained after this call. Qualified near-constant RBF kernels
+        evaluate those entries as ``expm1(-gamma * distance_squared)`` contrasts
+        and account separately for the constant component in each quadratic.
 
     Returns
     -------
@@ -328,8 +517,10 @@ def optimization_diagnostics(estimator, X, y, *, block_size=256):
     This helper runs only when explicitly called. It does not update parameters,
     RNG state, stopping criteria, or fitted convergence and optimality flags.
     Both stage intercepts remain unrestricted and unpenalized. Its dual bound is
-    a feasible-candidate numerical estimate, which may be conservative; it is
-    not a formally validated certificate or a new automatic stopping rule.
+    a floating-point candidate estimate, which may be conservative; it is not a
+    formally validated certificate or a new automatic stopping rule. Rounded
+    dual coefficients and their balance correction do not establish exact dual
+    feasibility.
 
     Kernel rows are checked exactly against the stored fitting basis. Original
     linear rows and original fitting labels are not retained by the estimators:

@@ -112,9 +112,13 @@ def test_near_constant_correction_also_follows_arithmetic_retry(monkeypatch):
         return original(distances, width)
 
     monkeypatch.setattr(_prediction, "_distance_rows_to_kernel", retry_once)
+    # Preserve the same one-dimensional geometry while reaching the norm/dot
+    # route beyond the small direct-execution feature limit.
+    query = np.pad(np.array([[-1e-6], [0.], [1e-6]]), ((0, 0), (0, 32)))
+    basis = np.pad(np.array([[-1.], [1.]]), ((0, 0), (0, 32)))
     with prediction_profile() as records:
         scores = _prediction.rbf_prediction_scores_blas(
-            np.array([[-1e-6], [0.], [1e-6]]), np.array([[-1.], [1.]]),
+            query, basis,
             np.array([-1., 1.]), 0., 1e-30, 4)
     np.testing.assert_array_equal(np.sign(scores), [-1, 0, 1])
     events = records[0]["fallbacks"]

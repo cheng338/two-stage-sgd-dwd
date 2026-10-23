@@ -448,12 +448,16 @@ def valid_record(record, *, expected_folds=None):
     return math.isclose(float(record['mean_score']), mean, rel_tol=1e-12, abs_tol=1e-12)
 
 
+def _record_rank_key(record):
+    """Ordering of an already validated candidate, shared with progress display."""
+    return (-record_score(record), float(record['params']['retention_fraction']),
+            -float(record['params']['lambd']), float(record['params']['gamma']))
+
+
 def ordered_eligible(records, *, expected_folds=None):
     """Rank valid records by accuracy, retention, stronger lambd, then gamma."""
     return sorted((record for record in records if valid_record(record, expected_folds=expected_folds)),
-                  key=lambda record: (-record_score(record),
-                      float(record['params']['retention_fraction']),
-                      -float(record['params']['lambd']), float(record['params']['gamma'])))
+                  key=_record_rank_key)
 
 
 def _initial_grid(grid, config):
